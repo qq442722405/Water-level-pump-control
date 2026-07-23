@@ -67,6 +67,14 @@ running = False
 alarm_triggered = False
 pyautogui.FAILSAFE = False
 
+# 小窗口全局控件句柄
+mini_win = None
+mini_water_label = None
+mini_freq_label = None
+mini_status_label = None
+mini_start_btn = None
+mini_stop_btn = None
+
 # -------------------- 配置与日志 --------------------
 def load_config():
     global config
@@ -93,7 +101,6 @@ def append_log(msg):
     timestamp = datetime.datetime.now().strftime("%H:%M:%S")
     formatted_msg = f"[{timestamp}] {msg}"
 
-    # 写入日志文件
     log_file = os.path.join(LOG_DIR, "events.log")
     try:
         with open(log_file, "a", encoding="utf-8") as f:
@@ -101,7 +108,6 @@ def append_log(msg):
     except Exception:
         pass
 
-    # 刷新 GUI Log 框
     def update_text_ui():
         if 'log_box' in globals() and log_box.winfo_exists():
             log_box.insert(tk.END, formatted_msg + "\n")
@@ -160,6 +166,17 @@ def stop_alarm():
             pygame.mixer.music.stop()
     except Exception:
         pass
+
+def on_mute_toggle():
+    """实时响应静音勾选/取消勾选"""
+    config["mute"] = mute_var.get()
+    if config["mute"]:
+        stop_alarm()
+        append_log("[静音] 已开启静音，强行切断报警音")
+    else:
+        append_log("[静音] 已取消静音")
+        if alarm_triggered:
+            play_alarm(loop=config["loop_alarm"])
 
 def test_sound():
     play_alarm(sound_filename=alarm_sound_var.get(), loop=False)
@@ -244,9 +261,8 @@ def select_point_on_screen(callback):
     except Exception:
         pass
 
-# -------------------- 图像预览放大逻辑 (修复变扁问题) --------------------
+# -------------------- 图像预览放大逻辑 --------------------
 def update_processed_preview(label_widget, processed_img):
-    """按比例等比放大预处理预览，彻底防止图像被高度压扁"""
     try:
         if processed_img is None:
             return
@@ -255,19 +271,16 @@ def update_processed_preview(label_widget, processed_img):
         if w == 0 or h == 0:
             return
 
-        # 设定固定预览高度为 65 像素，宽度按原图长宽比等比缩放
         target_h = 65
         scale_factor = target_h / float(h)
         target_w = int(w * scale_factor)
 
-        # 防止宽图溢出
         if target_w > 480:
             target_w = 480
 
         img_resized = img.resize((target_w, target_h), Image.Resampling.LANCZOS)
         photo = ImageTk.PhotoImage(img_resized)
 
-        # 关键配置：清空 text，避免 height 变成 4px
         label_widget.configure(image=photo, text="")
         label_widget.image = photo
     except Exception:
@@ -321,7 +334,6 @@ def control_loop():
             time.sleep(config["ocr_interval"] / 1000.0)
             continue
 
-        # 抓取图像预处理参数
         scale = float(config.get("ocr_scale", 2.0))
         contrast = float(config.get("ocr_contrast", 1.5))
         invert = bool(config.get("ocr_invert", False))
@@ -331,7 +343,6 @@ def control_loop():
         thresh_val = int(config.get("ocr_thresh", 0))
         morph_val = int(config.get("ocr_morph", 0))
 
-        # 执行 OCR 读取
         water_val, water_raw, proc_water_img = reader.read_number(
             water_img, scale, contrast, invert, blur_k, sharpen, binarize, thresh_val, morph_val
         )
@@ -339,16 +350,13 @@ def control_loop():
             freq_img, scale, contrast, invert, blur_k, sharpen, binarize, thresh_val, morph_val
         )
 
-        # 刷新 UI 状态与预处理预览图
         root.after(0, update_display, water_val, water_raw, freq_val, freq_raw, proc_water_img, proc_freq_img)
 
-        # 任何一项识别失败，输出原始诊断日志并等待下一轮
         if water_val is None or freq_val is None:
             append_log(f"[未识别跳过] 液位原始: '{water_raw}', 频率原始: '{freq_raw}'")
             time.sleep(config["ocr_interval"] / 1000.0)
             continue
 
-        # 水位调频逻辑与频率极限防护
         water_mid = config.get("water_mid", 105.0)
         freq_high = config.get("freq_high", 50.0)
         freq_low = config.get("freq_low", 35.0)
@@ -356,30 +364,27 @@ def control_loop():
         need_click = None
 
         if water_val > water_mid:
-            # 水位高于中间值，需要加频调大
             if freq_val < freq_high:
-                need_click = "point2"  # 执行加频
+                need_click = "point2"  # 加频
             else:
-                append_log(f"[极限拦截] 液位({water_val:.1f}) > 中间值({water_mid:.1f})，但当前频率({freq_val:.1f})已达上限({freq_high:.1f})，停止加频！")
+                append_log(f"[极限拦截] 液位({water_val:.1f}) > 中间值({water_mid:.1f})，当前频率({freq_val:.1f})已达上限({freq_high:.1f})，拒绝加频！")
 
         elif water_val < water_mid:
-            # 水位低于中间值，需要减频调小
             if freq_val > freq_low:
-                need_click = "point1"  # 执行减频
+                need_click = "point1"  # 减频
             else:
-                append_log(f"[极限拦截] 液位({water_val:.1f}) < 中间值({water_mid:.1f})，但当前频率({freq_val:.1f})已达下限({freq_low:.1f})，停止减频！")
+                append_log(f"[极限拦截] 液位({water_val:.1f}) < 中间值({water_mid:.1f})，当前频率({freq_val:.1f})已达下限({freq_low:.1f})，拒绝减频！")
 
         else:
             append_log(f"[维持现状] 液位({water_val:.1f}) 正好等于目标值({water_mid:.1f})")
 
-        # 执行点击操作
         if need_click:
             point = config["point2"] if need_click == "point2" else config["point1"]
             action_name = "加频(点2)" if need_click == "point2" else "减频(点1)"
             pyautogui.click(point[0], point[1])
             append_log(f"[执行控制] 液位:{water_val:.1f}(目标:{water_mid:.1f}), 频率:{freq_val:.1f} -> 点击【{action_name}】{point}")
 
-        # 报警检测（超限即刻报警）
+        # 报警检测
         is_water_abnormal = (water_val > config["water_high"] or water_val < config["water_low"])
         is_freq_abnormal = (freq_val > config["freq_high"] or freq_val < config["freq_low"])
 
@@ -394,10 +399,11 @@ def control_loop():
                 alarm_triggered = False
                 append_log("[恢复] 参数恢复正常，已停止报警")
 
-        # 严格遵守“检测间隔”控制（如 5 秒检测并操作一次）
+        # 严格控制休眠间隔
         time.sleep(config["ocr_interval"] / 1000.0)
 
 def update_display(water, water_raw, freq, freq_raw, proc_water_img, proc_freq_img):
+    # 更新主界面数值
     if water is not None:
         water_label.config(text=f"{water:.1f}", fg="blue")
     else:
@@ -411,6 +417,17 @@ def update_display(water, water_raw, freq, freq_raw, proc_water_img, proc_freq_i
     status_label.config(text="报警中" if alarm_triggered else "正常",
                         foreground="red" if alarm_triggered else "green")
 
+    # 同步更新小窗口数值
+    if mini_water_label and mini_water_label.winfo_exists():
+        w_txt = f"{water:.1f}" if water is not None else "未识别"
+        mini_water_label.config(text=f"液位: {w_txt}")
+    if mini_freq_label and mini_freq_label.winfo_exists():
+        f_txt = f"{freq:.1f}" if freq is not None else "未识别"
+        mini_freq_label.config(text=f"频率: {f_txt}")
+    if mini_status_label and mini_status_label.winfo_exists():
+        mini_status_label.config(text="状态: 报警中" if alarm_triggered else "状态: 正常",
+                                 fg="red" if alarm_triggered else "green")
+
     # 更新预览图
     update_processed_preview(water_preview, proc_water_img)
     update_processed_preview(freq_preview, proc_freq_img)
@@ -418,40 +435,9 @@ def update_display(water, water_raw, freq, freq_raw, proc_water_img, proc_freq_i
 def trigger_alarm():
     play_alarm(loop=config["loop_alarm"])
 
-def start_loop():
-    global running
-    if not running:
-        apply_ocr_settings_to_config()
-        running = True
-        append_log(f"--- 启动系统 (检测与控制间隔: {config['ocr_interval']} ms) ---")
-        threading.Thread(target=control_loop, daemon=True).start()
-        start_btn.config(state=tk.DISABLED)
-        stop_btn.config(state=tk.NORMAL)
-
-def stop_loop():
-    global running, alarm_triggered
-    running = False
-    stop_alarm()
-    alarm_triggered = False
-    append_log("--- 停止系统 ---")
-    start_btn.config(state=tk.NORMAL)
-    stop_btn.config(state=tk.DISABLED)
-
-# -------------------- 配置同步 --------------------
-def apply_ocr_settings_to_config():
-    try:
-        config["ocr_scale"] = float(scale_entry.get())
-        config["ocr_contrast"] = float(contrast_entry.get())
-        config["ocr_invert"] = invert_var.get()
-        config["ocr_sharpen"] = sharpen_var.get()
-        config["ocr_blur"] = int(blur_entry.get())
-        config["ocr_binarize"] = binarize_var.get()
-        config["ocr_thresh"] = int(thresh_entry.get())
-        config["ocr_morph"] = int(morph_entry.get())
-    except Exception:
-        pass
-
-def save_all_settings():
+# -------------------- 实时同步 UI 到 config --------------------
+def sync_ui_to_config():
+    """在启动系统或保存时，立即将界面上的当前值同步进 config 内存对象"""
     try:
         config["water_mid"] = float(water_mid_entry.get())
         config["water_high"] = float(water_high_entry.get())
@@ -460,13 +446,60 @@ def save_all_settings():
         config["freq_low"] = float(freq_low_entry.get())
         config["ocr_interval"] = int(ocr_interval_entry.get())
 
+        config["ocr_scale"] = float(scale_entry.get())
+        config["ocr_contrast"] = float(contrast_entry.get())
+        config["ocr_invert"] = invert_var.get()
+        config["ocr_sharpen"] = sharpen_var.get()
+        config["ocr_blur"] = int(blur_entry.get())
+        config["ocr_binarize"] = binarize_var.get()
+        config["ocr_thresh"] = int(thresh_entry.get())
+        config["ocr_morph"] = int(morph_entry.get())
+
         config["loop_alarm"] = loop_var.get()
         config["mute"] = mute_var.get()
         config["alarm_sound"] = alarm_sound_var.get()
+    except Exception as e:
+        print(f"同步 UI 参数异常: {e}")
 
-        apply_ocr_settings_to_config()
+def update_button_states():
+    """统一同步大窗口和迷你窗口的按键可用状态"""
+    if running:
+        start_btn.config(state=tk.DISABLED)
+        stop_btn.config(state=tk.NORMAL)
+        if mini_start_btn and mini_start_btn.winfo_exists():
+            mini_start_btn.config(state=tk.DISABLED)
+        if mini_stop_btn and mini_stop_btn.winfo_exists():
+            mini_stop_btn.config(state=tk.NORMAL)
+    else:
+        start_btn.config(state=tk.NORMAL)
+        stop_btn.config(state=tk.DISABLED)
+        if mini_start_btn and mini_start_btn.winfo_exists():
+            mini_start_btn.config(state=tk.NORMAL)
+        if mini_stop_btn and mini_stop_btn.winfo_exists():
+            mini_stop_btn.config(state=tk.DISABLED)
+
+def start_loop():
+    global running
+    if not running:
+        sync_ui_to_config()  # 启动时强制实时同步界面当前输入的值
+        running = True
+        append_log(f"--- 启动系统 (检测与控制间隔: {config['ocr_interval']} ms) ---")
+        threading.Thread(target=control_loop, daemon=True).start()
+        update_button_states()
+
+def stop_loop():
+    global running, alarm_triggered
+    running = False
+    stop_alarm()
+    alarm_triggered = False
+    append_log("--- 停止系统 ---")
+    update_button_states()
+
+def save_all_settings():
+    try:
+        sync_ui_to_config()
         save_config()
-        append_log("系统设置参数保存成功！")
+        append_log("系统设置参数已保存！")
         messagebox.showinfo("成功", "所有参数已成功保存！")
     except ValueError:
         messagebox.showerror("错误", "请输入有效的数值参数")
@@ -516,12 +549,67 @@ def update_ui_from_config():
     p2 = config["point2"]
     point2_label.config(text=f"坐标: {p2[0]},{p2[1]}")
 
+# -------------------- 迷你小窗口逻辑 --------------------
+def open_mini_window():
+    global mini_win, mini_water_label, mini_freq_label, mini_status_label, mini_start_btn, mini_stop_btn
+
+    if mini_win is not None and mini_win.winfo_exists():
+        mini_win.deiconify()
+        mini_win.lift()
+        root.withdraw()
+        return
+
+    mini_win = tk.Toplevel(root)
+    mini_win.title("迷你控制")
+    mini_win.geometry("220x180")
+    mini_win.attributes("-topmost", True)
+    mini_win.resizable(False, False)
+
+    def close_mini():
+        mini_win.destroy()
+        root.deiconify()
+
+    mini_win.protocol("WM_DELETE_WINDOW", close_mini)
+
+    # 监控数值简显
+    info_frame = tk.Frame(mini_win, pady=6)
+    info_frame.pack(fill=tk.X)
+
+    mini_water_label = tk.Label(info_frame, text="液位: --", font=("Microsoft YaHei", 10, "bold"), fg="blue")
+    mini_water_label.pack()
+
+    mini_freq_label = tk.Label(info_frame, text="频率: --", font=("Microsoft YaHei", 10, "bold"), fg="blue")
+    mini_freq_label.pack()
+
+    mini_status_label = tk.Label(info_frame, text="状态: 正常", font=("Microsoft YaHei", 9), fg="green")
+    mini_status_label.pack()
+
+    # 启动/停止按钮行
+    btn_frame1 = tk.Frame(mini_win, pady=3)
+    btn_frame1.pack()
+
+    mini_start_btn = tk.Button(btn_frame1, text="启动系统", command=start_loop, bg="#4CAF50", fg="white", width=8, font=("Microsoft YaHei", 9, "bold"))
+    mini_start_btn.pack(side=tk.LEFT, padx=3)
+
+    mini_stop_btn = tk.Button(btn_frame1, text="停止系统", command=stop_loop, bg="#F44336", fg="white", width=8, font=("Microsoft YaHei", 9, "bold"))
+    mini_stop_btn.pack(side=tk.LEFT, padx=3)
+
+    # 返回大窗口按钮
+    btn_frame2 = tk.Frame(mini_win, pady=5)
+    btn_frame2.pack()
+
+    back_btn = tk.Button(btn_frame2, text="返回大窗口", command=close_mini, width=18, font=("Microsoft YaHei", 9))
+    back_btn.pack()
+
+    update_button_states()
+    root.withdraw()  # 隐藏主大窗口
+
 # -------------------- GUI 构建 --------------------
 init_dirs()
 load_config()
 
 root = tk.Tk()
-root.title("液位/水泵控制 V2.3 (完美预览与频率极限控制版)")
+root.title("液位/水泵控制 V2.4 (小窗口与动态静音增强版)")
 root.geometry("560x930")
 root.resizable(True, True)
 
@@ -532,13 +620,12 @@ if os.path.exists(icon_path):
     except Exception:
         pass
 
-tk.Label(root, text="水位水泵控制系统 V2.3", font=("Microsoft YaHei", 12, "bold")).pack(pady=3)
+tk.Label(root, text="水位水泵控制系统 V2.4", font=("Microsoft YaHei", 12, "bold")).pack(pady=3)
 
 # 1. 预处理图像大图预览
 ocr_frame = tk.LabelFrame(root, text="实时识别与预处理大图预览", padx=10, pady=4, fg="darkblue", font=("Microsoft YaHei", 9, "bold"))
 ocr_frame.pack(fill=tk.X, padx=12, pady=3)
 
-# 液位行
 row_w = tk.Frame(ocr_frame)
 row_w.pack(fill=tk.X, pady=2)
 tk.Label(row_w, text="液位：", font=("Microsoft YaHei", 9, "bold")).pack(side=tk.LEFT)
@@ -548,11 +635,9 @@ water_rect_label = tk.Label(row_w, text="区域: --", fg="gray", font=("Microsof
 water_rect_label.pack(side=tk.LEFT, padx=5)
 tk.Button(row_w, text="框选液位", command=lambda: select_region_on_screen(update_water_rect)).pack(side=tk.RIGHT)
 
-# 使用 pady 进行撑拉，不再设 height=4
 water_preview = tk.Label(ocr_frame, text="[液位预处理图像预览]", bg="#222222", fg="#888888", pady=12, relief="sunken", bd=2)
 water_preview.pack(fill=tk.X, pady=3)
 
-# 频率行
 row_f = tk.Frame(ocr_frame)
 row_f.pack(fill=tk.X, pady=2)
 tk.Label(row_f, text="频率：", font=("Microsoft YaHei", 9, "bold")).pack(side=tk.LEFT)
@@ -613,11 +698,10 @@ tk.Label(row_o3, text="笔画加粗/瘦身(-2~2):", font=("Microsoft YaHei", 9))
 morph_entry = tk.Entry(row_o3, width=5)
 morph_entry.grid(row=0, column=3, padx=2)
 
-# 3. 参数设置 (左液位，右频率及间隔)
+# 3. 参数设置
 param_frame = tk.LabelFrame(root, text="控制与报警阈值设置", padx=10, pady=4)
 param_frame.pack(fill=tk.X, padx=12, pady=3)
 
-# 左侧：液位
 tk.Label(param_frame, text="液位中间值：", font=("Microsoft YaHei", 9)).grid(row=0, column=0, sticky="e", padx=2, pady=2)
 water_mid_entry = tk.Entry(param_frame, width=9)
 water_mid_entry.grid(row=0, column=1, sticky="w", padx=2, pady=2)
@@ -630,7 +714,6 @@ tk.Label(param_frame, text="液位下限(报警)：", font=("Microsoft YaHei", 9
 water_low_entry = tk.Entry(param_frame, width=9)
 water_low_entry.grid(row=2, column=1, sticky="w", padx=2, pady=2)
 
-# 右侧：频率与间隔
 tk.Label(param_frame, text="频率上限(报警)：", font=("Microsoft YaHei", 9)).grid(row=0, column=2, sticky="e", padx=(15, 2), pady=2)
 freq_high_entry = tk.Entry(param_frame, width=9)
 freq_high_entry.grid(row=0, column=3, sticky="w", padx=2, pady=2)
@@ -662,7 +745,8 @@ row_a2.pack(fill=tk.X, pady=1)
 loop_var = tk.BooleanVar(value=True)
 tk.Checkbutton(row_a2, text="循环报警", variable=loop_var).pack(side=tk.LEFT)
 mute_var = tk.BooleanVar(value=False)
-tk.Checkbutton(row_a2, text="静音", variable=mute_var).pack(side=tk.LEFT, padx=5)
+# 绑定 command=on_mute_toggle 实现即时静音切断
+tk.Checkbutton(row_a2, text="静音", variable=mute_var, command=on_mute_toggle).pack(side=tk.LEFT, padx=5)
 
 coord_frame = tk.LabelFrame(bottom_group, text="控制坐标", padx=6, pady=2)
 coord_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(4, 0))
@@ -683,12 +767,13 @@ point2_label.pack(side=tk.LEFT, padx=4)
 ctrl_frame = tk.Frame(root)
 ctrl_frame.pack(fill=tk.X, padx=12, pady=4)
 
-start_btn = tk.Button(ctrl_frame, text="启动系统", command=start_loop, width=10, bg="#4CAF50", fg="white", font=("Microsoft YaHei", 9, "bold"))
-start_btn.pack(side=tk.LEFT, padx=4)
-stop_btn = tk.Button(ctrl_frame, text="停止系统", command=stop_loop, state=tk.DISABLED, width=10, bg="#F44336", fg="white", font=("Microsoft YaHei", 9, "bold"))
-stop_btn.pack(side=tk.LEFT, padx=4)
-tk.Button(ctrl_frame, text="保存设置", command=save_all_settings, width=10, font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, padx=4)
-tk.Button(ctrl_frame, text="恢复默认", command=restore_defaults, width=10, font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, padx=4)
+start_btn = tk.Button(ctrl_frame, text="启动系统", command=start_loop, width=8, bg="#4CAF50", fg="white", font=("Microsoft YaHei", 9, "bold"))
+start_btn.pack(side=tk.LEFT, padx=2)
+stop_btn = tk.Button(ctrl_frame, text="停止系统", command=stop_loop, state=tk.DISABLED, width=8, bg="#F44336", fg="white", font=("Microsoft YaHei", 9, "bold"))
+stop_btn.pack(side=tk.LEFT, padx=2)
+tk.Button(ctrl_frame, text="切换小窗口", command=open_mini_window, width=9, bg="#2196F3", fg="white", font=("Microsoft YaHei", 9, "bold")).pack(side=tk.LEFT, padx=2)
+tk.Button(ctrl_frame, text="保存设置", command=save_all_settings, width=8, font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, padx=2)
+tk.Button(ctrl_frame, text="恢复默认", command=restore_defaults, width=8, font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, padx=2)
 
 # 6. 运行诊断日志框
 log_frame = tk.LabelFrame(root, text="运行诊断日志", padx=6, pady=4, fg="brown", font=("Microsoft YaHei", 9, "bold"))
