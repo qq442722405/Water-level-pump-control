@@ -7,29 +7,28 @@ import numpy as np
 class OcrReader:
     def __init__(self, model_dir='models'):
         os.makedirs(model_dir, exist_ok=True)
-        if not self._model_exists(model_dir):
-            print(f"[OCR] 模型目录 {model_dir} 缺失，自动下载...")
-            try:
-                self.reader = easyocr.Reader(['en'], model_storage_directory=model_dir, download_enabled=True)
-            except Exception as e:
-                raise RuntimeError(f"自动下载模型失败: {e}")
-        else:
-            self.reader = easyocr.Reader(['en'], model_storage_directory=model_dir, download_enabled=False)
+        det_path = os.path.join(model_dir, 'craft_mlt_25k.pth')
+        rec_path = os.path.join(model_dir, 'english_g2.pth')
+        download = not (os.path.exists(det_path) and os.path.exists(rec_path))
 
-    def _model_exists(self, model_dir):
-        detector = os.path.join(model_dir, 'craft_mlt_25k.pth')
-        recognizer = os.path.join(model_dir, 'english_g2.pth')
-        return os.path.isfile(detector) and os.path.isfile(recognizer)
+        try:
+            self.reader = easyocr.Reader(['en'], model_storage_directory=model_dir, download_enabled=download)
+        except Exception as e:
+            raise RuntimeError(f"OCR初始化失败: {e}")
 
-    def preprocess(self, pil_image, scale=2.0, contrast=1.5, grayscale=True, invert=False, binarize=False, thresh_val=0):
-        """图像预处理核心逻辑：放大 -> 调对比度 -> 灰度 -> 反色 -> 二值化"""
+    def preprocess(self, pil_image, scale=2.0, contrast=1.5, invert=False, 
+                   blur_k=0, sharpen=False, binarize=False, thresh_val=0, morph_val=0):
+        """
+        图像预处理流水线：
+        放大 -> 调对比度 -> 灰度化 -> 颜色反色 -> 降噪/锐化 -> 二值化 -> 笔画加粗/瘦身
+        """
         img_np = np.array(pil_image)
         if len(img_np.shape) == 2:
             img_bgr = cv2.cvtColor(img_np, cv2.COLOR_GRAY2BGR)
         else:
             img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
 
-        # 1. 图像放大 (极大幅度提升微小文字识别率)
+        # 1. 放大倍数 (解决分辨率低问题)
         if scale > 1.0:
             h, w = img_bgr.shape[:2]
             new_w, new_h = max(1, int(w * scale)), max(1, int(h * scale))
@@ -39,50 +38,71 @@ class OcrReader:
         if contrast != 1.0:
             img_bgr = cv2.convertScaleAbs(img_bgr, alpha=contrast, beta=0)
 
-        # 3. 灰度化
-        if grayscale or binarize:
-            img_gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-        else:
-            img_gray = img_bgr
+        # 转灰度
+        img_gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
 
-        # 4. 反色 (适用于暗色背景、LED数码管)
+        # 3. 颜色反色 (专治黑底白字、LED红字数码管)
         if invert:
             img_gray = cv2.bitwise_not(img_gray)
 
-        # 5. 二值化 (黑白分明)
+        # 4. 高斯模糊降噪 (去除背景网格噪点)
+        if blur_k > 0:
+            k = blur_k if blur_k % 2 != 0 else blur_k + 1
+            img_gray = cv2.GaussianBlur(img_gray, (k, k), 0)
+
+        # 5. 边缘锐化 (专治字体边缘模糊发虚)
+        if sharpen:
+            kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]], dtype=np.float32)
+            img_gray = cv2.filter2D(img_gray, -1, kernel)
+
+        # 6. 二值化
         if binarize:
-            if len(img_gray.shape) == 3:
-                img_gray = cv2.cvtColor(img_gray, cv2.COLOR_BGR2GRAY)
             if thresh_val <= 0:
-                # 0 表示开启 Otsu 自动阈值
                 _, img_gray = cv2.threshold(img_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
             else:
                 _, img_gray = cv2.threshold(img_gray, int(thresh_val), 255, cv2.THRESH_BINARY)
 
+        # 7. 笔画加粗/瘦身 (修复断笔或文字粘连)
+        if morph_val != 0:
+            kernel = np.ones((3, 3), np.uint8)
+            if morph_val > 0:
+                # 膨胀：加粗笔画
+                img_gray = cv2.dilate(img_gray, kernel, iterations=abs(morph_val))
+            else:
+                # 腐蚀：细化笔画
+                img_gray = cv2.erode(img_gray, kernel, iterations=abs(morph_val))
+
         return img_gray
 
-    def read_number(self, pil_image, scale=2.0, contrast=1.5, grayscale=True, invert=False, binarize=False, thresh_val=0):
+    def read_number(self, pil_image, scale=2.0, contrast=1.5, invert=False, 
+                    blur_k=0, sharpen=False, binarize=False, thresh_val=0, morph_val=0):
+        """
+        返回 tuple: (提取到的浮点数或None, 原始识别文本信息, 预处理后的图像)
+        """
         try:
-            # 执行预处理
-            processed_img = self.preprocess(pil_image, scale, contrast, grayscale, invert, binarize, thresh_val)
-
-            # EasyOCR 限制仅允许数字与小数点
-            result = self.reader.readtext(
-                processed_img,
-                allowlist='0123456789.',
-                detail=0,
-                paragraph=True,
-                mag_ratio=1.0
+            processed_img = self.preprocess(
+                pil_image, scale, contrast, invert, 
+                blur_k, sharpen, binarize, thresh_val, morph_val
             )
 
-            if not result:
-                return None, processed_img
+            # 读取字符
+            results = self.reader.readtext(
+                processed_img,
+                allowlist='0123456789.OoIil',
+                detail=0,
+                paragraph=False
+            )
 
-            text = "".join(result).replace(' ', '').replace('O', '0').replace('o', '0')
-            match = re.search(r'\d+\.?\d*', text)
+            raw_text = " ".join(results).strip()
+            if not raw_text:
+                return None, "未识别到字符", processed_img
+
+            # 替换常见混淆字符
+            clean_text = raw_text.replace('O', '0').replace('o', '0').replace('I', '1').replace('l', '1').replace(' ', '')
+            match = re.search(r'\d+\.?\d*', clean_text)
             if match:
-                return float(match.group()), processed_img
-            return None, processed_img
+                return float(match.group()), raw_text, processed_img
+            return None, f"未检测到有效数字({raw_text})", processed_img
+
         except Exception as e:
-            print(f"[OCR] 识别处理异常: {e}")
-            return None, None
+            return None, f"错误: {str(e)}", None

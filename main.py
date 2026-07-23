@@ -25,24 +25,23 @@ def enable_dpi_awareness():
 
 enable_dpi_awareness()
 
-# -------------------- 资源路径解析 --------------------
+# -------------------- 资源与配置 --------------------
 def get_resource_path(relative_path):
     if hasattr(sys, '_MEIPASS'):
         return os.path.join(sys._MEIPASS, relative_path)
     return os.path.join(os.path.abspath("."), relative_path)
 
-# -------------------- 全局配置 --------------------
 CONFIG_FILE = "config.json"
 LOG_DIR = "logs"
 MODEL_DIR = "models"
 ASSETS_DIR = "assets"
 
 DEFAULT_CONFIG = {
-    "water_mid": 105.0,     # 液位中间值（控制目标）
-    "water_high": 120.0,    # 液位上限（报警）
-    "water_low": 90.0,      # 液位下限（报警）
-    "freq_high": 50.0,      # 频率上限（报警）
-    "freq_low": 35.0,       # 频率下限（报警）
+    "water_mid": 105.0,
+    "water_high": 120.0,
+    "water_low": 90.0,
+    "freq_high": 50.0,
+    "freq_low": 35.0,
     "ocr_interval": 500,
     "adjust_delay": 3000,
     "alarm_count": 5,
@@ -51,8 +50,17 @@ DEFAULT_CONFIG = {
     "alarm_sound": "Windows Notify.wav",
     "water_rect": [100, 100, 120, 35],
     "freq_rect": [350, 100, 120, 35],
-    "point1": [1250, 560], # 减频坐标
-    "point2": [1320, 560], # 加频坐标
+    "point1": [1250, 560],
+    "point2": [1320, 560],
+    # 图像预处理参数
+    "ocr_scale": 2.0,
+    "ocr_contrast": 1.5,
+    "ocr_invert": False,
+    "ocr_sharpen": True,
+    "ocr_blur": 0,
+    "ocr_binarize": False,
+    "ocr_thresh": 0,
+    "ocr_morph": 0,
     "easyocr_model": MODEL_DIR
 }
 
@@ -62,7 +70,7 @@ alarm_triggered = False
 abnormal_count = 0
 pyautogui.FAILSAFE = False
 
-# -------------------- 工具函数 --------------------
+# -------------------- 配置与日志 --------------------
 def load_config():
     global config
     if os.path.exists(CONFIG_FILE):
@@ -92,16 +100,7 @@ def log(msg):
     except Exception:
         pass
 
-def take_screenshot():
-    filename = datetime.datetime.now().strftime("%Y%m%d_%H%M%S") + "_alarm.png"
-    path = os.path.join(LOG_DIR, filename)
-    try:
-        ImageGrab.grab().save(path)
-        log(f"截图已保存: {path}")
-    except Exception as e:
-        log(f"截图失败: {e}")
-
-# -------------------- 报警声音 --------------------
+# -------------------- 音频处理 --------------------
 WINDOWS_MEDIA = r"C:\Windows\Media"
 SOUND_LIST = []
 if os.path.exists(WINDOWS_MEDIA):
@@ -109,7 +108,7 @@ if os.path.exists(WINDOWS_MEDIA):
         if f.lower().endswith('.wav'):
             SOUND_LIST.append(f)
 if not SOUND_LIST:
-    SOUND_LIST = ["Windows Notify.wav", "Alarm01.wav", "Alarm02.wav"]
+    SOUND_LIST = ["Windows Notify.wav", "Alarm01.wav"]
 
 def get_alarm_path(filename):
     sys_path = os.path.join(WINDOWS_MEDIA, filename)
@@ -143,7 +142,7 @@ def play_alarm(sound_filename=None, loop=True):
             sound = pygame.mixer.Sound(path)
             sound.play()
     except Exception as e:
-        print(f"播放声音失败: {e}")
+        print(f"播放报警音频失败: {e}")
 
 def stop_alarm():
     try:
@@ -153,12 +152,10 @@ def stop_alarm():
         pass
 
 def test_sound():
-    # 获取下拉框当前选中的音频文件直接播放（修复问题五）
-    selected_sound = alarm_sound_var.get()
-    play_alarm(sound_filename=selected_sound, loop=False)
+    play_alarm(sound_filename=alarm_sound_var.get(), loop=False)
 
-# -------------------- 屏幕区域 / 点选择 --------------------
-def select_region_on_screen(callback, preview_widget=None):
+# -------------------- 交互选择 --------------------
+def select_region_on_screen(callback):
     top = tk.Toplevel(root)
     top.attributes("-fullscreen", True)
     top.attributes("-alpha", 0.3)
@@ -168,8 +165,7 @@ def select_region_on_screen(callback, preview_widget=None):
     canvas = tk.Canvas(top, highlightthickness=0, bg='black')
     canvas.pack(fill=tk.BOTH, expand=True)
 
-    start_x = tk.IntVar()
-    start_y = tk.IntVar()
+    start_x, start_y = tk.IntVar(), tk.IntVar()
     rect = None
 
     def close_window():
@@ -196,19 +192,15 @@ def select_region_on_screen(callback, preview_widget=None):
         x2, y2 = event.x_root, event.y_root
         if x1 > x2: x1, x2 = x2, x1
         if y1 > y2: y1, y2 = y2, y1
-        w = x2 - x1
-        h = y2 - y1
+        w, h = x2 - x1, y2 - y1
         close_window()
         if w > 5 and h > 5:
             callback(x1, y1, w, h)
-            if preview_widget:
-                update_preview(preview_widget, (x1, y1, x1 + w, y1 + h))
 
     canvas.bind("<ButtonPress-1>", on_mouse_down)
     canvas.bind("<B1-Motion>", on_mouse_move)
     canvas.bind("<ButtonRelease-1>", on_mouse_up)
     top.bind("<Escape>", lambda e: close_window())
-
     top.focus_force()
     try:
         top.grab_set()
@@ -242,32 +234,27 @@ def select_point_on_screen(callback):
     except Exception:
         pass
 
-def update_preview(label_widget, bbox):
-    """放大预览截图显示（修复问题六）"""
+def update_processed_preview(label_widget, processed_img):
     try:
-        x1, y1, x2, y2 = bbox
-        if x2 <= x1 or y2 <= y1:
+        if processed_img is None:
             return
-        img = ImageGrab.grab(bbox=(x1, y1, x2, y2))
-        # 放大预览尺寸到 320x70
-        img.thumbnail((320, 70), Image.Resampling.LANCZOS)
+        img = Image.fromarray(processed_img)
+        img.thumbnail((320, 50), Image.Resampling.LANCZOS)
         photo = ImageTk.PhotoImage(img)
         label_widget.configure(image=photo, text="")
         label_widget.image = photo
     except Exception:
-        label_widget.configure(image='', text="预览无法显示")
+        label_widget.configure(image='', text="预览更新失败")
 
-# -------------------- UI 更新回调 --------------------
+# -------------------- 更新 UI 坐标 --------------------
 def update_water_rect(x, y, w, h):
     config["water_rect"] = [x, y, w, h]
     water_rect_label.config(text=f"区域: {x},{y} {w}x{h}")
-    update_preview(water_preview, (x, y, x + w, y + h))
     save_config()
 
 def update_freq_rect(x, y, w, h):
     config["freq_rect"] = [x, y, w, h]
     freq_rect_label.config(text=f"区域: {x},{y} {w}x{h}")
-    update_preview(freq_preview, (x, y, x + w, y + h))
     save_config()
 
 def update_point1(x, y):
@@ -280,13 +267,13 @@ def update_point2(x, y):
     point2_label.config(text=f"坐标: {x},{y}")
     save_config()
 
-# -------------------- 控制逻辑线程 --------------------
+# -------------------- 后台控制核心线程 --------------------
 def control_loop():
     global running, abnormal_count, alarm_triggered
     try:
         reader = OcrReader(config.get("easyocr_model", MODEL_DIR))
     except Exception as e:
-        root.after(0, messagebox.showerror, "模型错误", f"无法加载 OCR 模型: {e}")
+        root.after(0, messagebox.showerror, "模型加载错误", str(e))
         root.after(0, stop_loop)
         return
 
@@ -297,50 +284,59 @@ def control_loop():
             water_img = ImageGrab.grab(bbox=(wr[0], wr[1], wr[0]+wr[2], wr[1]+wr[3]))
             freq_img = ImageGrab.grab(bbox=(fr[0], fr[1], fr[0]+fr[2], fr[1]+fr[3]))
         except Exception as e:
-            log(f"截图失败: {e}")
+            log(f"截屏失败: {e}")
             time.sleep(config["ocr_interval"] / 1000.0)
             continue
 
-        water_val = reader.read_number(water_img)
-        freq_val = reader.read_number(freq_img)
+        # 动态获取预处理参数
+        scale = float(config.get("ocr_scale", 2.0))
+        contrast = float(config.get("ocr_contrast", 1.5))
+        invert = bool(config.get("ocr_invert", False))
+        sharpen = bool(config.get("ocr_sharpen", True))
+        blur_k = int(config.get("ocr_blur", 0))
+        binarize = bool(config.get("ocr_binarize", False))
+        thresh_val = int(config.get("ocr_thresh", 0))
+        morph_val = int(config.get("ocr_morph", 0))
 
-        root.after(0, update_display, water_val, freq_val)
+        # 调用 OCR 处理
+        water_val, water_raw, proc_water_img = reader.read_number(
+            water_img, scale, contrast, invert, blur_k, sharpen, binarize, thresh_val, morph_val
+        )
+        freq_val, freq_raw, proc_freq_img = reader.read_number(
+            freq_img, scale, contrast, invert, blur_k, sharpen, binarize, thresh_val, morph_val
+        )
+
+        # 刷新界面状态及原始文本诊断
+        root.after(0, update_display, water_val, water_raw, freq_val, freq_raw, proc_water_img, proc_freq_img)
 
         if water_val is None or freq_val is None:
             time.sleep(config["ocr_interval"] / 1000.0)
             continue
 
-        # --- 控制逻辑：基于中间值 (water_mid) --- (修复问题二)
+        # 中间值逻辑控制
         water_mid = config.get("water_mid", 105.0)
         need_click = None
 
         if water_val > water_mid:
-            # 大于中间值 -> 加频率
             if freq_val < config["freq_high"]:
-                need_click = "point2"
-            else:
-                log(f"液位 {water_val:.1f} > 中间值 {water_mid:.1f}，但频率已达上限 {freq_val:.1f}，停止加频")
+                need_click = "point2"  # 加频
         elif water_val < water_mid:
-            # 小于中间值 -> 减频率
             if freq_val > config["freq_low"]:
-                need_click = "point1"
-            else:
-                log(f"液位 {water_val:.1f} < 中间值 {water_mid:.1f}，但频率已达下限 {freq_val:.1f}，停止减频")
+                need_click = "point1"  # 减频
 
         if need_click:
             point = config["point2"] if need_click == "point2" else config["point1"]
             action_name = "加频(点2)" if need_click == "point2" else "减频(点1)"
             pyautogui.click(point[0], point[1])
-            log(f"液位 {water_val:.1f} (目标中间值 {water_mid:.1f})，频率 {freq_val:.1f} -> 执行 {action_name}，等待 {config['adjust_delay']}ms")
+            log(f"液位 {water_val:.1f} (目标中间值 {water_mid:.1f})，频率 {freq_val:.1f} -> 执行 {action_name}")
             time.sleep(config["adjust_delay"] / 1000.0)
 
-        # --- 报警逻辑：检测液位与频率的上下限 --- (修复问题三、问题四)
+        # 报警判定
         is_water_abnormal = (water_val > config["water_high"] or water_val < config["water_low"])
         is_freq_abnormal = (freq_val > config["freq_high"] or freq_val < config["freq_low"])
 
         if is_water_abnormal or is_freq_abnormal:
             abnormal_count += 1
-            log(f"检测到参数超标(液位:{water_val:.1f}, 频率:{freq_val:.1f})，连续异常计次: {abnormal_count}")
         else:
             abnormal_count = 0
             if alarm_triggered:
@@ -348,31 +344,38 @@ def control_loop():
                 alarm_triggered = False
 
         if abnormal_count >= config["alarm_count"] and not alarm_triggered:
-            log(f"连续异常次数达到 {abnormal_count}，触发报警")
+            log(f"连续异常 {abnormal_count} 次，触发报警！")
             root.after(0, trigger_alarm)
             alarm_triggered = True
 
         time.sleep(config["ocr_interval"] / 1000.0)
 
-def update_display(water, freq):
-    water_label.config(text=f"{water:.1f}" if water is not None else "识别失败")
-    freq_label.config(text=f"{freq:.1f}" if freq is not None else "识别失败")
+def update_display(water, water_raw, freq, freq_raw, proc_water_img, proc_freq_img):
+    if water is not None:
+        water_label.config(text=f"{water:.1f}", fg="blue")
+    else:
+        water_label.config(text=f"未识别 [{water_raw}]", fg="red")
+
+    if freq is not None:
+        freq_label.config(text=f"{freq:.1f}", fg="blue")
+    else:
+        freq_label.config(text=f"未识别 [{freq_raw}]", fg="red")
+
     status_label.config(text="报警中" if alarm_triggered else "正常",
                         foreground="red" if alarm_triggered else "green")
     count_label.config(text=str(abnormal_count))
 
+    # 更新预处理图像效果 preview
+    update_processed_preview(water_preview, proc_water_img)
+    update_processed_preview(freq_preview, proc_freq_img)
+
 def trigger_alarm():
     play_alarm(loop=config["loop_alarm"])
-    take_screenshot()
-    try:
-        from win10toast import ToastNotifier
-        threading.Thread(target=lambda: ToastNotifier().show_toast("液位控制报警", "连续异常次数达到设定值！", duration=3), daemon=True).start()
-    except Exception:
-        pass
 
 def start_loop():
     global running
     if not running:
+        apply_ocr_settings_to_config()
         running = True
         threading.Thread(target=control_loop, daemon=True).start()
         start_btn.config(state=tk.DISABLED)
@@ -386,7 +389,20 @@ def stop_loop():
     start_btn.config(state=tk.NORMAL)
     stop_btn.config(state=tk.DISABLED)
 
-# -------------------- 参数保存与恢复 --------------------
+# -------------------- 配置保存同步 --------------------
+def apply_ocr_settings_to_config():
+    try:
+        config["ocr_scale"] = float(scale_entry.get())
+        config["ocr_contrast"] = float(contrast_entry.get())
+        config["ocr_invert"] = invert_var.get()
+        config["ocr_sharpen"] = sharpen_var.get()
+        config["ocr_blur"] = int(blur_entry.get())
+        config["ocr_binarize"] = binarize_var.get()
+        config["ocr_thresh"] = int(thresh_entry.get())
+        config["ocr_morph"] = int(morph_entry.get())
+    except Exception:
+        pass
+
 def save_all_settings():
     try:
         config["water_mid"] = float(water_mid_entry.get())
@@ -400,17 +416,19 @@ def save_all_settings():
         config["loop_alarm"] = loop_var.get()
         config["mute"] = mute_var.get()
         config["alarm_sound"] = alarm_sound_var.get()
+
+        apply_ocr_settings_to_config()
         save_config()
-        messagebox.showinfo("成功", "设置已保存！")
+        messagebox.showinfo("成功", "设置与识别优化参数已保存！")
     except ValueError:
-        messagebox.showerror("错误", "请输入有效的数字参数")
+        messagebox.showerror("错误", "请输入正确的数字数值")
 
 def restore_defaults():
     global config
     config = DEFAULT_CONFIG.copy()
     update_ui_from_config()
     save_config()
-    messagebox.showinfo("恢复", "已恢复默认设置")
+    messagebox.showinfo("恢复", "已恢复为默认参数")
 
 def update_ui_from_config():
     entries_map = [
@@ -421,11 +439,20 @@ def update_ui_from_config():
         (freq_low_entry, "freq_low"),
         (ocr_interval_entry, "ocr_interval"),
         (adjust_delay_entry, "adjust_delay"),
-        (alarm_count_entry, "alarm_count")
+        (alarm_count_entry, "alarm_count"),
+        (scale_entry, "ocr_scale"),
+        (contrast_entry, "ocr_contrast"),
+        (blur_entry, "ocr_blur"),
+        (thresh_entry, "ocr_thresh"),
+        (morph_entry, "ocr_morph")
     ]
     for entry, key in entries_map:
         entry.delete(0, tk.END)
         entry.insert(0, str(config.get(key, DEFAULT_CONFIG.get(key))))
+
+    invert_var.set(config.get("ocr_invert", False))
+    sharpen_var.set(config.get("ocr_sharpen", True))
+    binarize_var.set(config.get("ocr_binarize", False))
 
     loop_var.set(config["loop_alarm"])
     mute_var.set(config["mute"])
@@ -434,27 +461,23 @@ def update_ui_from_config():
 
     wr = config["water_rect"]
     water_rect_label.config(text=f"区域: {wr[0]},{wr[1]} {wr[2]}x{wr[3]}")
-    update_preview(water_preview, (wr[0], wr[1], wr[0] + wr[2], wr[1] + wr[3]))
-
     fr = config["freq_rect"]
     freq_rect_label.config(text=f"区域: {fr[0]},{fr[1]} {fr[2]}x{fr[3]}")
-    update_preview(freq_preview, (fr[0], fr[1], fr[0] + fr[2], fr[1] + fr[3]))
 
     p1 = config["point1"]
     point1_label.config(text=f"坐标: {p1[0]},{p1[1]}")
     p2 = config["point2"]
     point2_label.config(text=f"坐标: {p2[0]},{p2[1]}")
 
-# -------------------- 构建 GUI 界面 --------------------
+# -------------------- GUI 构建 --------------------
 init_dirs()
 load_config()
 
 root = tk.Tk()
-root.title("水位水泵控制 V2.0")
-root.geometry("480x760")
+root.title("液位/水泵控制 V2.1 (边缘模糊/反色增强版)")
+root.geometry("540x880")
 root.resizable(True, True)
 
-# 图标载入
 icon_path = get_resource_path("1.ico")
 if os.path.exists(icon_path):
     try:
@@ -462,55 +485,96 @@ if os.path.exists(icon_path):
     except Exception:
         pass
 
-# 顶部标题
-tk.Label(root, text="水位水泵控制系统 V2.0", font=("Microsoft YaHei", 13, "bold")).pack(pady=6)
+tk.Label(root, text="水位水泵控制系统 V2.1", font=("Microsoft YaHei", 12, "bold")).pack(pady=4)
 
-# 1. 实时 OCR & 预览区域
-ocr_frame = tk.LabelFrame(root, text="实时 OCR & 预览", padx=10, pady=6)
+# 1. 实时预览与诊断面板
+ocr_frame = tk.LabelFrame(root, text="实时识别诊断与图像预览", padx=10, pady=4)
 ocr_frame.pack(fill=tk.X, padx=12, pady=4)
 
 # 液位行
 row_w = tk.Frame(ocr_frame)
 row_w.pack(fill=tk.X, pady=2)
 tk.Label(row_w, text="液位：", font=("Microsoft YaHei", 9)).pack(side=tk.LEFT)
-water_label = tk.Label(row_w, text="--", fg="blue", font=("Microsoft YaHei", 10, "bold"))
+water_label = tk.Label(row_w, text="--", fg="blue", font=("Microsoft YaHei", 9, "bold"))
 water_label.pack(side=tk.LEFT, padx=5)
-water_rect_label = tk.Label(row_w, text="区域: --", fg="gray", font=("Microsoft YaHei", 9))
+water_rect_label = tk.Label(row_w, text="区域: --", fg="gray", font=("Microsoft YaHei", 8))
 water_rect_label.pack(side=tk.LEFT, padx=5)
-tk.Button(row_w, text="选择区域", command=lambda: select_region_on_screen(update_water_rect, water_preview)).pack(side=tk.RIGHT)
+tk.Button(row_w, text="框选液位", command=lambda: select_region_on_screen(update_water_rect)).pack(side=tk.RIGHT)
 
-water_preview = tk.Label(ocr_frame, text="液位截图预览", bg="#EAEAEA", height=4) # 加高控件显示大图片
-water_preview.pack(fill=tk.X, pady=3)
+water_preview = tk.Label(ocr_frame, text="[液位图像预处理预览]", bg="#333333", fg="white", height=2)
+water_preview.pack(fill=tk.X, pady=2)
 
 # 频率行
 row_f = tk.Frame(ocr_frame)
 row_f.pack(fill=tk.X, pady=2)
 tk.Label(row_f, text="频率：", font=("Microsoft YaHei", 9)).pack(side=tk.LEFT)
-freq_label = tk.Label(row_f, text="--", fg="blue", font=("Microsoft YaHei", 10, "bold"))
+freq_label = tk.Label(row_f, text="--", fg="blue", font=("Microsoft YaHei", 9, "bold"))
 freq_label.pack(side=tk.LEFT, padx=5)
-freq_rect_label = tk.Label(row_f, text="区域: --", fg="gray", font=("Microsoft YaHei", 9))
+freq_rect_label = tk.Label(row_f, text="区域: --", fg="gray", font=("Microsoft YaHei", 8))
 freq_rect_label.pack(side=tk.LEFT, padx=5)
-tk.Button(row_f, text="选择区域", command=lambda: select_region_on_screen(update_freq_rect, freq_preview)).pack(side=tk.RIGHT)
+tk.Button(row_f, text="框选频率", command=lambda: select_region_on_screen(update_freq_rect)).pack(side=tk.RIGHT)
 
-freq_preview = tk.Label(ocr_frame, text="频率截图预览", bg="#EAEAEA", height=4) # 加高控件显示大图片
-freq_preview.pack(fill=tk.X, pady=3)
+freq_preview = tk.Label(ocr_frame, text="[频率图像预处理预览]", bg="#333333", fg="white", height=2)
+freq_preview.pack(fill=tk.X, pady=2)
 
 # 状态行
 row_s = tk.Frame(ocr_frame)
-row_s.pack(fill=tk.X, pady=3)
+row_s.pack(fill=tk.X, pady=2)
 tk.Label(row_s, text="状态：", font=("Microsoft YaHei", 9)).pack(side=tk.LEFT)
 status_label = tk.Label(row_s, text="正常", fg="green", font=("Microsoft YaHei", 9, "bold"))
 status_label.pack(side=tk.LEFT, padx=5)
-tk.Label(row_s, text="连续异常：", font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, padx=(25, 0))
+tk.Label(row_s, text="连续异常：", font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, padx=(20, 0))
 count_label = tk.Label(row_s, text="0", fg="red", font=("Microsoft YaHei", 9, "bold"))
 count_label.pack(side=tk.LEFT)
 
-# 2. 参数设置
-param_frame = tk.LabelFrame(root, text="参数设置", padx=10, pady=6)
+# 2. 识别与图像预处理优化开关（重点功能）
+opt_frame = tk.LabelFrame(root, text="识别优化与图像预处理 (解决边缘模糊/黑底无响应)", padx=10, pady=4, fg="blue")
+opt_frame.pack(fill=tk.X, padx=12, pady=4)
+
+row_o1 = tk.Frame(opt_frame)
+row_o1.pack(fill=tk.X, pady=2)
+
+invert_var = tk.BooleanVar(value=False)
+tk.Checkbutton(row_o1, text="颜色反色(深底必开)", variable=invert_var, fg="red").pack(side=tk.LEFT, padx=2)
+
+sharpen_var = tk.BooleanVar(value=True)
+tk.Checkbutton(row_o1, text="边缘锐化(修复字模糊)", variable=sharpen_var, fg="darkgreen").pack(side=tk.LEFT, padx=8)
+
+binarize_var = tk.BooleanVar(value=False)
+tk.Checkbutton(row_o1, text="二值化", variable=binarize_var).pack(side=tk.LEFT, padx=2)
+
+row_o2 = tk.Frame(opt_frame)
+row_o2.pack(fill=tk.X, pady=2)
+
+tk.Label(row_o2, text="放大倍数:", font=("Microsoft YaHei", 9)).grid(row=0, column=0, sticky="e")
+scale_entry = tk.Entry(row_o2, width=5)
+scale_entry.grid(row=0, column=1, padx=2)
+
+tk.Label(row_o2, text="对比度:", font=("Microsoft YaHei", 9)).grid(row=0, column=2, sticky="e")
+contrast_entry = tk.Entry(row_o2, width=5)
+contrast_entry.grid(row=0, column=3, padx=2)
+
+tk.Label(row_o2, text="降噪(0/3):", font=("Microsoft YaHei", 9)).grid(row=0, column=4, sticky="e")
+blur_entry = tk.Entry(row_o2, width=5)
+blur_entry.grid(row=0, column=5, padx=2)
+
+row_o3 = tk.Frame(opt_frame)
+row_o3.pack(fill=tk.X, pady=2)
+
+tk.Label(row_o3, text="二值阈值(0自动):", font=("Microsoft YaHei", 9)).grid(row=0, column=0, sticky="e")
+thresh_entry = tk.Entry(row_o3, width=5)
+thresh_entry.grid(row=0, column=1, padx=2)
+
+tk.Label(row_o3, text="笔画加粗/瘦身(-2~2):", font=("Microsoft YaHei", 9)).grid(row=0, column=2, sticky="e")
+morph_entry = tk.Entry(row_o3, width=5)
+morph_entry.grid(row=0, column=3, padx=2)
+
+# 3. 控制参数设置
+param_frame = tk.LabelFrame(root, text="控制阈值设置", padx=10, pady=4)
 param_frame.pack(fill=tk.X, padx=12, pady=4)
 
 params_def = [
-    ("液位中间值：", "water_mid"),  # 新增控制中间值参数
+    ("液位中间值：", "water_mid"),
     ("液位上限(报警)：", "water_high"),
     ("液位下限(报警)：", "water_low"),
     ("频率上限(报警)：", "freq_high"),
@@ -538,27 +602,27 @@ ocr_interval_entry = entries["ocr_interval"]
 adjust_delay_entry = entries["adjust_delay"]
 alarm_count_entry = entries["alarm_count"]
 
-# 3. 报警设置
-alarm_frame = tk.LabelFrame(root, text="报警设置", padx=10, pady=6)
+# 4. 报警设置
+alarm_frame = tk.LabelFrame(root, text="报警与声音设置", padx=10, pady=4)
 alarm_frame.pack(fill=tk.X, padx=12, pady=4)
 
 row_a1 = tk.Frame(alarm_frame)
 row_a1.pack(fill=tk.X, pady=2)
 tk.Label(row_a1, text="声音文件：", font=("Microsoft YaHei", 9)).pack(side=tk.LEFT)
 alarm_sound_var = tk.StringVar(value=SOUND_LIST[0])
-sound_combo = ttk.Combobox(row_a1, textvariable=alarm_sound_var, values=SOUND_LIST, state="readonly", width=20)
+sound_combo = ttk.Combobox(row_a1, textvariable=alarm_sound_var, values=SOUND_LIST, state="readonly", width=18)
 sound_combo.pack(side=tk.LEFT, padx=5)
 tk.Button(row_a1, text="试听", command=test_sound).pack(side=tk.LEFT, padx=5)
 
 row_a2 = tk.Frame(alarm_frame)
 row_a2.pack(fill=tk.X, pady=2)
 loop_var = tk.BooleanVar(value=True)
-tk.Checkbutton(row_a2, text="循环报警", variable=loop_var, font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, padx=5)
+tk.Checkbutton(row_a2, text="循环报警", variable=loop_var).pack(side=tk.LEFT, padx=5)
 mute_var = tk.BooleanVar(value=False)
-tk.Checkbutton(row_a2, text="静音模式", variable=mute_var, font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, padx=20)
+tk.Checkbutton(row_a2, text="静音模式", variable=mute_var).pack(side=tk.LEFT, padx=15)
 
-# 4. 操作坐标
-coord_frame = tk.LabelFrame(root, text="操作坐标", padx=10, pady=6)
+# 5. 操作坐标
+coord_frame = tk.LabelFrame(root, text="点击控制坐标", padx=10, pady=4)
 coord_frame.pack(fill=tk.X, padx=12, pady=4)
 
 row_c1 = tk.Frame(coord_frame)
@@ -573,18 +637,17 @@ tk.Button(row_c2, text="选择加频坐标(点2)", command=lambda: select_point_
 point2_label = tk.Label(row_c2, text="坐标: --", fg="gray", font=("Microsoft YaHei", 9))
 point2_label.pack(side=tk.LEFT, padx=10)
 
-# 5. 控制按钮
+# 6. 底部控制按钮
 ctrl_frame = tk.Frame(root)
-ctrl_frame.pack(fill=tk.X, padx=12, pady=10)
+ctrl_frame.pack(fill=tk.X, padx=12, pady=8)
 
-start_btn = tk.Button(ctrl_frame, text="启动", command=start_loop, width=8, bg="#4CAF50", fg="white", font=("Microsoft YaHei", 9, "bold"))
-start_btn.pack(side=tk.LEFT, padx=4)
-stop_btn = tk.Button(ctrl_frame, text="停止", command=stop_loop, state=tk.DISABLED, width=8, bg="#F44336", fg="white", font=("Microsoft YaHei", 9, "bold"))
-stop_btn.pack(side=tk.LEFT, padx=4)
-tk.Button(ctrl_frame, text="保存设置", command=save_all_settings, width=10, font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, padx=4)
-tk.Button(ctrl_frame, text="恢复默认", command=restore_defaults, width=10, font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, padx=4)
+start_btn = tk.Button(ctrl_frame, text="启动系统", command=start_loop, width=10, bg="#4CAF50", fg="white", font=("Microsoft YaHei", 9, "bold"))
+start_btn.pack(side=tk.LEFT, padx=5)
+stop_btn = tk.Button(ctrl_frame, text="停止系统", command=stop_loop, state=tk.DISABLED, width=10, bg="#F44336", fg="white", font=("Microsoft YaHei", 9, "bold"))
+stop_btn.pack(side=tk.LEFT, padx=5)
+tk.Button(ctrl_frame, text="保存设置", command=save_all_settings, width=10, font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, padx=5)
+tk.Button(ctrl_frame, text="恢复默认", command=restore_defaults, width=10, font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, padx=5)
 
-# 更新 UI 参数显示
 update_ui_from_config()
 
 root.mainloop()
