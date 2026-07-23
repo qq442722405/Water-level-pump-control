@@ -1,12 +1,12 @@
 easyocr>=1.6
 torch>=2.0.0
 torchvision>=0.15.0
-pyautogui>=0.9.53
+opencv-python>=4.5
 pillow>=9.0
 pynput>=1.7
 pygame>=2.1
-opencv-python>=4.5
+pyautogui>=0.9.53
 pywin32>=301
 win10toast>=0.9
-pyinstaller>=6.0
 numpy
+pyinstaller>=6.0
