@@ -12,11 +12,11 @@ from PIL import ImageGrab, Image, ImageTk
 import pyautogui
 from ocr import OcrReader
 
-# -------------------- DPI 缩放兼容 (解决高分屏截图与点击错位问题) --------------------
+# -------------------- DPI 缩放兼容 --------------------
 def enable_dpi_awareness():
     if os.name == 'nt':
         try:
-            ctypes.windll.shcore.SetProcessDpiAwareness(2)  # Per-Monitor DPI Aware
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
         except Exception:
             try:
                 ctypes.windll.user32.SetProcessDPIAware()
@@ -25,9 +25,8 @@ def enable_dpi_awareness():
 
 enable_dpi_awareness()
 
-# -------------------- 资源路径解析 (兼容本地运行与 PyInstaller 打包) --------------------
+# -------------------- 资源路径解析 --------------------
 def get_resource_path(relative_path):
-    """获取静态资源的绝对路径"""
     if hasattr(sys, '_MEIPASS'):
         return os.path.join(sys._MEIPASS, relative_path)
     return os.path.join(os.path.abspath("."), relative_path)
@@ -39,10 +38,11 @@ MODEL_DIR = "models"
 ASSETS_DIR = "assets"
 
 DEFAULT_CONFIG = {
-    "water_high": 120.0,
-    "water_low": 90.0,
-    "freq_high": 50.0,
-    "freq_low": 35.0,
+    "water_mid": 105.0,     # 液位中间值（控制目标）
+    "water_high": 120.0,    # 液位上限（报警）
+    "water_low": 90.0,      # 液位下限（报警）
+    "freq_high": 50.0,      # 频率上限（报警）
+    "freq_low": 35.0,       # 频率下限（报警）
     "ocr_interval": 500,
     "adjust_delay": 3000,
     "alarm_count": 5,
@@ -51,8 +51,8 @@ DEFAULT_CONFIG = {
     "alarm_sound": "Windows Notify.wav",
     "water_rect": [100, 100, 120, 35],
     "freq_rect": [350, 100, 120, 35],
-    "point1": [1250, 560],
-    "point2": [1320, 560],
+    "point1": [1250, 560], # 减频坐标
+    "point2": [1320, 560], # 加频坐标
     "easyocr_model": MODEL_DIR
 }
 
@@ -60,7 +60,6 @@ config = DEFAULT_CONFIG.copy()
 running = False
 alarm_triggered = False
 abnormal_count = 0
-last_water_value = None
 pyautogui.FAILSAFE = False
 
 # -------------------- 工具函数 --------------------
@@ -128,10 +127,11 @@ def init_pygame_mixer():
     except Exception as e:
         log(f"Pygame Mixer 初始化失败: {e}")
 
-def play_alarm(loop=True):
+def play_alarm(sound_filename=None, loop=True):
     if config["mute"]:
         return
-    path = get_alarm_path(config["alarm_sound"])
+    snd_name = sound_filename if sound_filename else config["alarm_sound"]
+    path = get_alarm_path(snd_name)
     if not path:
         return
     try:
@@ -153,7 +153,9 @@ def stop_alarm():
         pass
 
 def test_sound():
-    play_alarm(loop=False)
+    # 获取下拉框当前选中的音频文件直接播放（修复问题五）
+    selected_sound = alarm_sound_var.get()
+    play_alarm(sound_filename=selected_sound, loop=False)
 
 # -------------------- 屏幕区域 / 点选择 --------------------
 def select_region_on_screen(callback, preview_widget=None):
@@ -241,13 +243,14 @@ def select_point_on_screen(callback):
         pass
 
 def update_preview(label_widget, bbox):
-    """更新屏幕框选区域的实时预览图像"""
+    """放大预览截图显示（修复问题六）"""
     try:
         x1, y1, x2, y2 = bbox
         if x2 <= x1 or y2 <= y1:
             return
         img = ImageGrab.grab(bbox=(x1, y1, x2, y2))
-        img.thumbnail((200, 40), Image.Resampling.LANCZOS)
+        # 放大预览尺寸到 320x70
+        img.thumbnail((320, 70), Image.Resampling.LANCZOS)
         photo = ImageTk.PhotoImage(img)
         label_widget.configure(image=photo, text="")
         label_widget.image = photo
@@ -277,9 +280,9 @@ def update_point2(x, y):
     point2_label.config(text=f"坐标: {x},{y}")
     save_config()
 
-# -------------------- 控制逻辑后台线程 --------------------
+# -------------------- 控制逻辑线程 --------------------
 def control_loop():
-    global running, abnormal_count, last_water_value, alarm_triggered
+    global running, abnormal_count, alarm_triggered
     try:
         reader = OcrReader(config.get("easyocr_model", MODEL_DIR))
     except Exception as e:
@@ -307,35 +310,39 @@ def control_loop():
             time.sleep(config["ocr_interval"] / 1000.0)
             continue
 
+        # --- 控制逻辑：基于中间值 (water_mid) --- (修复问题二)
+        water_mid = config.get("water_mid", 105.0)
         need_click = None
-        if water_val > config["water_high"] and freq_val < config["freq_high"]:
-            need_click = "point1"
-        elif water_val < config["water_low"] and freq_val > config["freq_low"]:
-            need_click = "point2"
+
+        if water_val > water_mid:
+            # 大于中间值 -> 加频率
+            if freq_val < config["freq_high"]:
+                need_click = "point2"
+            else:
+                log(f"液位 {water_val:.1f} > 中间值 {water_mid:.1f}，但频率已达上限 {freq_val:.1f}，停止加频")
+        elif water_val < water_mid:
+            # 小于中间值 -> 减频率
+            if freq_val > config["freq_low"]:
+                need_click = "point1"
+            else:
+                log(f"液位 {water_val:.1f} < 中间值 {water_mid:.1f}，但频率已达下限 {freq_val:.1f}，停止减频")
 
         if need_click:
-            point = config["point1"] if need_click == "point1" else config["point2"]
+            point = config["point2"] if need_click == "point2" else config["point1"]
+            action_name = "加频(点2)" if need_click == "point2" else "减频(点1)"
             pyautogui.click(point[0], point[1])
-            log(f"液位 {water_val:.1f}，频率 {freq_val:.1f}，点击 {need_click}，等待 {config['adjust_delay']}ms")
+            log(f"液位 {water_val:.1f} (目标中间值 {water_mid:.1f})，频率 {freq_val:.1f} -> 执行 {action_name}，等待 {config['adjust_delay']}ms")
             time.sleep(config["adjust_delay"] / 1000.0)
-        else:
-            if water_val > config["water_high"]:
-                log(f"液位超标但频率已达上限 {freq_val:.1f}，不操作")
-            elif water_val < config["water_low"]:
-                log(f"液位过低但频率已达下限 {freq_val:.1f}，不操作")
 
-        if water_val > config["water_high"] or water_val < config["water_low"]:
-            if last_water_value is not None and (
-                (last_water_value > config["water_high"] and water_val > config["water_high"]) or
-                (last_water_value < config["water_low"] and water_val < config["water_low"])
-            ):
-                abnormal_count += 1
-            else:
-                abnormal_count = 1
-            last_water_value = water_val
+        # --- 报警逻辑：检测液位与频率的上下限 --- (修复问题三、问题四)
+        is_water_abnormal = (water_val > config["water_high"] or water_val < config["water_low"])
+        is_freq_abnormal = (freq_val > config["freq_high"] or freq_val < config["freq_low"])
+
+        if is_water_abnormal or is_freq_abnormal:
+            abnormal_count += 1
+            log(f"检测到参数超标(液位:{water_val:.1f}, 频率:{freq_val:.1f})，连续异常计次: {abnormal_count}")
         else:
             abnormal_count = 0
-            last_water_value = None
             if alarm_triggered:
                 stop_alarm()
                 alarm_triggered = False
@@ -382,6 +389,7 @@ def stop_loop():
 # -------------------- 参数保存与恢复 --------------------
 def save_all_settings():
     try:
+        config["water_mid"] = float(water_mid_entry.get())
         config["water_high"] = float(water_high_entry.get())
         config["water_low"] = float(water_low_entry.get())
         config["freq_high"] = float(freq_high_entry.get())
@@ -406,6 +414,7 @@ def restore_defaults():
 
 def update_ui_from_config():
     entries_map = [
+        (water_mid_entry, "water_mid"),
         (water_high_entry, "water_high"),
         (water_low_entry, "water_low"),
         (freq_high_entry, "freq_high"),
@@ -416,7 +425,7 @@ def update_ui_from_config():
     ]
     for entry, key in entries_map:
         entry.delete(0, tk.END)
-        entry.insert(0, str(config[key]))
+        entry.insert(0, str(config.get(key, DEFAULT_CONFIG.get(key))))
 
     loop_var.set(config["loop_alarm"])
     mute_var.set(config["mute"])
@@ -442,10 +451,10 @@ load_config()
 
 root = tk.Tk()
 root.title("水位水泵控制 V2.0")
-root.geometry("460x700")
+root.geometry("480x760")
 root.resizable(True, True)
 
-# 图标加载 (兼容 PyInstaller 解压环境)
+# 图标载入
 icon_path = get_resource_path("1.ico")
 if os.path.exists(icon_path):
     try:
@@ -470,7 +479,7 @@ water_rect_label = tk.Label(row_w, text="区域: --", fg="gray", font=("Microsof
 water_rect_label.pack(side=tk.LEFT, padx=5)
 tk.Button(row_w, text="选择区域", command=lambda: select_region_on_screen(update_water_rect, water_preview)).pack(side=tk.RIGHT)
 
-water_preview = tk.Label(ocr_frame, text="液位截图预览", bg="#EAEAEA", height=2)
+water_preview = tk.Label(ocr_frame, text="液位截图预览", bg="#EAEAEA", height=4) # 加高控件显示大图片
 water_preview.pack(fill=tk.X, pady=3)
 
 # 频率行
@@ -483,7 +492,7 @@ freq_rect_label = tk.Label(row_f, text="区域: --", fg="gray", font=("Microsoft
 freq_rect_label.pack(side=tk.LEFT, padx=5)
 tk.Button(row_f, text="选择区域", command=lambda: select_region_on_screen(update_freq_rect, freq_preview)).pack(side=tk.RIGHT)
 
-freq_preview = tk.Label(ocr_frame, text="频率截图预览", bg="#EAEAEA", height=2)
+freq_preview = tk.Label(ocr_frame, text="频率截图预览", bg="#EAEAEA", height=4) # 加高控件显示大图片
 freq_preview.pack(fill=tk.X, pady=3)
 
 # 状态行
@@ -496,15 +505,16 @@ tk.Label(row_s, text="连续异常：", font=("Microsoft YaHei", 9)).pack(side=t
 count_label = tk.Label(row_s, text="0", fg="red", font=("Microsoft YaHei", 9, "bold"))
 count_label.pack(side=tk.LEFT)
 
-# 2. 参数设置 (改进为两列 Grid 排版，不再错位)
+# 2. 参数设置
 param_frame = tk.LabelFrame(root, text="参数设置", padx=10, pady=6)
 param_frame.pack(fill=tk.X, padx=12, pady=4)
 
 params_def = [
-    ("液位上限：", "water_high"),
-    ("液位下限：", "water_low"),
-    ("频率上限：", "freq_high"),
-    ("频率下限：", "freq_low"),
+    ("液位中间值：", "water_mid"),  # 新增控制中间值参数
+    ("液位上限(报警)：", "water_high"),
+    ("液位下限(报警)：", "water_low"),
+    ("频率上限(报警)：", "freq_high"),
+    ("频率下限(报警)：", "freq_low"),
     ("检测间隔(ms)：", "ocr_interval"),
     ("调整等待(ms)：", "adjust_delay"),
     ("报警次数：", "alarm_count")
@@ -519,6 +529,7 @@ for i, (label_text, key) in enumerate(params_def):
     entry.grid(row=r, column=c+1, sticky="w", padx=4, pady=2)
     entries[key] = entry
 
+water_mid_entry = entries["water_mid"]
 water_high_entry = entries["water_high"]
 water_low_entry = entries["water_low"]
 freq_high_entry = entries["freq_high"]
@@ -552,17 +563,17 @@ coord_frame.pack(fill=tk.X, padx=12, pady=4)
 
 row_c1 = tk.Frame(coord_frame)
 row_c1.pack(fill=tk.X, pady=2)
-tk.Button(row_c1, text="选择减频坐标", command=lambda: select_point_on_screen(update_point1)).pack(side=tk.LEFT)
+tk.Button(row_c1, text="选择减频坐标(点1)", command=lambda: select_point_on_screen(update_point1)).pack(side=tk.LEFT)
 point1_label = tk.Label(row_c1, text="坐标: --", fg="gray", font=("Microsoft YaHei", 9))
 point1_label.pack(side=tk.LEFT, padx=10)
 
 row_c2 = tk.Frame(coord_frame)
 row_c2.pack(fill=tk.X, pady=2)
-tk.Button(row_c2, text="选择加频坐标", command=lambda: select_point_on_screen(update_point2)).pack(side=tk.LEFT)
+tk.Button(row_c2, text="选择加频坐标(点2)", command=lambda: select_point_on_screen(update_point2)).pack(side=tk.LEFT)
 point2_label = tk.Label(row_c2, text="坐标: --", fg="gray", font=("Microsoft YaHei", 9))
 point2_label.pack(side=tk.LEFT, padx=10)
 
-# 5. 底部控制按钮
+# 5. 控制按钮
 ctrl_frame = tk.Frame(root)
 ctrl_frame.pack(fill=tk.X, padx=12, pady=10)
 
@@ -573,8 +584,7 @@ stop_btn.pack(side=tk.LEFT, padx=4)
 tk.Button(ctrl_frame, text="保存设置", command=save_all_settings, width=10, font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, padx=4)
 tk.Button(ctrl_frame, text="恢复默认", command=restore_defaults, width=10, font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, padx=4)
 
-# 读取配置并应用到 UI
+# 更新 UI 参数显示
 update_ui_from_config()
 
-# 启动 GUI 主循环
 root.mainloop()

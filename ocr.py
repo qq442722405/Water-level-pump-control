@@ -21,12 +21,12 @@ class OcrReader:
 
     def read_number(self, image):
         try:
-            result = self.reader.readtext(image, detail=0, paragraph=True)
+            # 限制 allowlist 仅包含数字与小数点，只提取数字
+            result = self.reader.readtext(image, allowlist='0123456789.', detail=0, paragraph=True)
             if not result:
                 return None
-            text = result[0]
-            text = text.replace('O', '0').replace('I', '1').replace('l', '1').replace(',', '.')
-            match = re.search(r'[\d]+\.?[\d]*', text)
+            text = "".join(result)
+            match = re.search(r'\d+\.?\d*', text)
             if match:
                 return float(match.group())
             return None
