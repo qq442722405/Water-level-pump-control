@@ -1,7 +1,7 @@
 name: 水位水泵控制
 
 on:
-  workflow_dispatch:   # 仅手动触发
+  workflow_dispatch:          # 仅手动触发
 
 jobs:
   build:
@@ -14,66 +14,34 @@ jobs:
       - name: 设置 Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
+
+      - name: 升级 pip
+        run: python -m pip install --upgrade pip
 
       - name: 安装依赖
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
+        run: pip install -r requirements.txt
 
-      - name: 创建缺失文件（若不存在）
+      - name: 打包 EXE
         shell: powershell
         run: |
-          if (-not (Test-Path alarm.wav)) {
-            python -c "import wave, struct; w=wave.open('alarm.wav','w'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(44100); w.writeframes(struct.pack('h',0)*44100); w.close()"
-          }
-          if (-not (Test-Path config.json)) {
-            @"
-{
-    "water_high":120,
-    "water_low":90,
-    "freq_high":50,
-    "freq_low":35,
-    "alarm_count":5,
-    "ocr_interval":500,
-    "click_delay":300,
-    "point1":[1250,560],
-    "point2":[1320,560],
-    "water_rect":[100,100,120,35],
-    "freq_rect":[350,100,120,35],
-    "easyocr_model":"models"
-}
-"@ | Out-File -Encoding utf8 config.json
-          }
-
-      - name: 缓存 EasyOCR 模型
-        id: cache-models
-        uses: actions/cache@v3
-        with:
-          path: models
-          key: easyocr-models-${{ hashFiles('requirements.txt') }}
-
-      - name: 下载 EasyOCR 模型（若缓存未命中）
-        if: steps.cache-models.outputs.cache-hit != 'true'
-        env:
-          PYTHONIOENCODING: utf-8
-        run: |
-          python -c "import easyocr; reader = easyocr.Reader(['en'], model_storage_directory='models', download_enabled=True)"
-
-      - name: 使用 PyInstaller 打包
-        shell: powershell
-        run: |
-          python -m PyInstaller --onefile --windowed `
-            --add-data "alarm.wav;." `
-            --add-data "config.json;." `
-            --add-data "models;models/" `
+          python -m PyInstaller --clean --noconfirm `
+            --windowed --onefile `
+            --name "水位水泵控制" `
+            --collect-all easyocr `
+            --collect-all torch `
+            --collect-all torchvision `
+            --hidden-import=cv2 `
+            --hidden-import=PIL `
+            --hidden-import=pygame `
+            --hidden-import=pyautogui `
+            --hidden-import=win10toast `
             --hidden-import=pynput.keyboard._win32 `
             --hidden-import=pynput.mouse._win32 `
-            --name "水位水泵控制" `
+            --add-data "assets;assets" `
             main.py
 
-      - name: 上传成品 EXE
+      - name: 上传 EXE
         uses: actions/upload-artifact@v4
         with:
           name: 水位水泵控制-Windows
