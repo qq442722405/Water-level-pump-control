@@ -1,7 +1,7 @@
 name: 水位水泵控制
 
 on:
-  workflow_dispatch:          # 仅手动触发
+  workflow_dispatch:
 
 jobs:
   build:
@@ -16,21 +16,30 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: 升级 pip
-        run: python -m pip install --upgrade pip
+      - name: 升级 pip 并安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-      - name: 安装依赖
-        run: pip install -r requirements.txt
+      - name: 显示已安装包（便于调试）
+        run: pip list
 
-      - name: PyInstaller 打包（onedir 模式，最稳定）
+      - name: PyInstaller 打包（严格模式）
         shell: powershell
         run: |
-          python -m PyInstaller --clean --noconfirm `
+          $ErrorActionPreference = 'Stop'
+          Write-Host "开始打包..."
+          python -m PyInstaller --log-level=INFO --clean --noconfirm `
             --windowed --onedir `
             --name "水位水泵控制" `
             --collect-all easyocr `
             --collect-all torch `
             --collect-all torchvision `
+            --collect-all opencv-python `
+            --collect-all pillow `
+            --collect-all pynput `
+            --collect-all pygame `
+            --collect-all pyautogui `
             --hidden-import=cv2 `
             --hidden-import=PIL `
             --hidden-import=pygame `
@@ -39,12 +48,27 @@ jobs:
             --hidden-import=pynput.keyboard._win32 `
             --hidden-import=pynput.mouse._win32 `
             main.py
-          # 无 --icon 行，也不打包 models，确保不会因文件缺失而失败
+          Write-Host "打包命令执行完毕"
+
+          # 检查关键输出目录
+          if (Test-Path "dist/水位水泵控制/水位水泵控制.exe") {
+            Write-Host "✅ 打包成功，EXE 已生成"
+          } else {
+            Write-Error "❌ 打包失败：未找到 dist/水位水泵控制/水位水泵控制.exe"
+            exit 1
+          }
 
       - name: 压缩打包文件夹
         shell: powershell
         run: |
+          $ErrorActionPreference = 'Stop'
           Compress-Archive -Path "dist/水位水泵控制/*" -DestinationPath "水位水泵控制.zip"
+          if (Test-Path "水位水泵控制.zip") {
+            Write-Host "压缩完成：水位水泵控制.zip"
+          } else {
+            Write-Error "压缩失败"
+            exit 1
+          }
 
       - name: 上传制品
         uses: actions/upload-artifact@v4
