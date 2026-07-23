@@ -10,10 +10,11 @@ import datetime
 from PIL import ImageGrab
 from ocr import OcrReader
 
-# -------------------- 配置 --------------------
+# ==================== 全局配置 ====================
 CONFIG_FILE = "config.json"
 LOG_DIR = "logs"
-ALARM_SOUND = "alarm.wav"
+ALARM_SOUND = os.path.join("assets", "alarm.wav")   # 报警音频路径
+MODEL_DIR = "models"
 
 default_config = {
     "water_high": 120,
@@ -27,7 +28,7 @@ default_config = {
     "point2": [1320, 560],
     "water_rect": [100, 100, 120, 35],
     "freq_rect": [350, 100, 120, 35],
-    "easyocr_model": "models"
+    "easyocr_model": MODEL_DIR
 }
 
 config = default_config.copy()
@@ -36,51 +37,73 @@ alarm_triggered = False
 abnormal_count = 0
 last_water_value = None
 
-# -------------------- 工具函数 --------------------
+# 关闭 pyautogui 的安全退出机制（防止鼠标移动到左上角意外终止）
+pyautogui.FAILSAFE = False
+
+# ==================== 工具函数 ====================
 def load_config():
     global config
     if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, 'r') as f:
+        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             saved = json.load(f)
             config.update(saved)
     else:
         save_config()
 
 def save_config():
-    with open(CONFIG_FILE, 'w') as f:
-        json.dump(config, f, indent=4)
+    with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+        json.dump(config, f, indent=4, ensure_ascii=False)
+
+def init_dirs():
+    """确保必要的目录存在"""
+    os.makedirs(LOG_DIR, exist_ok=True)
+    os.makedirs("assets", exist_ok=True)
+    os.makedirs(MODEL_DIR, exist_ok=True)
 
 def init_log():
-    if not os.path.exists(LOG_DIR):
-        os.makedirs(LOG_DIR)
+    init_dirs()
+    # 日志文件在 LOG_DIR 下
+    pass
 
 def log(msg):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with open(os.path.join(LOG_DIR, "events.log"), "a", encoding="utf-8") as f:
+    log_file = os.path.join(LOG_DIR, "events.log")
+    with open(log_file, "a", encoding="utf-8") as f:
         f.write(f"[{timestamp}] {msg}\n")
 
 def take_screenshot():
     filename = datetime.datetime.now().strftime("%Y%m%d_%H%M%S") + "_alarm.png"
     path = os.path.join(LOG_DIR, filename)
-    ImageGrab.grab().save(path)
-    log(f"截图已保存: {path}")
+    try:
+        img = ImageGrab.grab()
+        img.save(path)
+        log(f"截图已保存: {path}")
+    except Exception as e:
+        log(f"截图失败: {e}")
+        # 若 ImageGrab 失败，可尝试使用 mss（需安装 mss 库）
+        # import mss
+        # with mss.mss() as sct:
+        #     sct.shot(output=path)
 
 def play_alarm():
+    """播放报警声音，支持循环"""
     try:
-        pygame.mixer.init()
+        if not pygame.mixer.get_init():
+            pygame.mixer.init()
         if os.path.exists(ALARM_SOUND):
             pygame.mixer.music.load(ALARM_SOUND)
-            pygame.mixer.music.play(-1)  # 循环播放
+            pygame.mixer.music.play(-1)   # 循环播放
     except Exception as e:
         print(f"播放报警失败: {e}")
 
 def stop_alarm():
     try:
-        pygame.mixer.music.stop()
+        if pygame.mixer.get_init():
+            pygame.mixer.music.stop()
     except:
         pass
 
-# -------------------- 区域/点选择（简化版，使用对话框输入）--------------------
+# ==================== 区域/点选择（简化版） ====================
 def select_region():
     x = simpledialog.askinteger("框选区域", "左上角 X:")
     y = simpledialog.askinteger("框选区域", "左上角 Y:")
@@ -117,18 +140,17 @@ def re_select():
     save_config()
     messagebox.showinfo("完成", "框选配置已保存！")
 
-# -------------------- 控制循环 --------------------
+# ==================== 控制循环 ====================
 def control_loop():
     global running, abnormal_count, last_water_value, alarm_triggered
     try:
-        reader = OcrReader(config["easyocr_model"])
+        reader = OcrReader(config.get("easyocr_model", MODEL_DIR))
     except Exception as e:
         root.after(0, messagebox.showerror, "模型错误", f"无法加载 OCR 模型: {e}")
         stop_loop()
         return
 
     while running:
-        # 截取区域
         water_bbox = (
             config["water_rect"][0],
             config["water_rect"][1],
@@ -142,8 +164,13 @@ def control_loop():
             config["freq_rect"][1] + config["freq_rect"][3]
         )
 
-        water_img = ImageGrab.grab(bbox=water_bbox)
-        freq_img = ImageGrab.grab(bbox=freq_bbox)
+        try:
+            water_img = ImageGrab.grab(bbox=water_bbox)
+            freq_img = ImageGrab.grab(bbox=freq_bbox)
+        except Exception as e:
+            log(f"截图失败: {e}")
+            time.sleep(config["ocr_interval"] / 1000)
+            continue
 
         water_val = reader.read_number(water_img)
         freq_val = reader.read_number(freq_img)
@@ -205,7 +232,8 @@ def update_display(water, freq):
         freq_label.config(text=f"{freq:.1f} Hz")
     else:
         freq_label.config(text="识别失败")
-    status_label.config(text="报警中" if alarm_triggered else "正常", fg="red" if alarm_triggered else "green")
+    status_label.config(text="报警中" if alarm_triggered else "正常",
+                        fg="red" if alarm_triggered else "green")
     count_label.config(text=str(abnormal_count))
 
 def trigger_alarm():
@@ -233,13 +261,13 @@ def stop_loop():
     start_btn.config(state=tk.NORMAL)
     stop_btn.config(state=tk.DISABLED)
 
-def save_settings(vars):
+def save_settings(vars_dict):
     try:
-        config["water_high"] = float(vars["water_high"].get())
-        config["water_low"] = float(vars["water_low"].get())
-        config["freq_high"] = float(vars["freq_high"].get())
-        config["freq_low"] = float(vars["freq_low"].get())
-        config["alarm_count"] = int(vars["alarm_count"].get())
+        config["water_high"] = float(vars_dict["water_high"].get())
+        config["water_low"] = float(vars_dict["water_low"].get())
+        config["freq_high"] = float(vars_dict["freq_high"].get())
+        config["freq_low"] = float(vars_dict["freq_low"].get())
+        config["alarm_count"] = int(vars_dict["alarm_count"].get())
         save_config()
         messagebox.showinfo("成功", "设置已保存")
     except ValueError:
@@ -252,14 +280,14 @@ def choose_model_dir():
         save_config()
         messagebox.showinfo("完成", "模型路径已更新")
 
-# -------------------- GUI --------------------
+# ==================== GUI 布局 ====================
 root = tk.Tk()
-root.title("液位自动控制")
-root.geometry("360x450")
+root.title("液位自动控制 - 水位水泵控制")
+root.geometry("380x480")
 root.resizable(False, False)
 
 load_config()
-init_log()
+init_dirs()
 
 # 显示区
 tk.Label(root, text="液位OCR：").grid(row=0, column=0, sticky="e", pady=2)
