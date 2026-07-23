@@ -8,27 +8,27 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - name: 检出代码
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: 设置 Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: 升级 pip 并安装依赖
+      - name: Upgrade pip and install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 显示已安装包（便于调试）
+      - name: List installed packages (debug)
         run: pip list
 
-      - name: PyInstaller 打包（严格模式）
+      - name: Build with PyInstaller (onedir, strict mode)
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          Write-Host "开始打包..."
+          Write-Host "Starting PyInstaller build..."
           python -m PyInstaller --log-level=INFO --clean --noconfirm `
             --windowed --onedir `
             --name "水位水泵控制" `
@@ -48,29 +48,29 @@ jobs:
             --hidden-import=pynput.keyboard._win32 `
             --hidden-import=pynput.mouse._win32 `
             main.py
-          Write-Host "打包命令执行完毕"
+          Write-Host "PyInstaller command completed"
 
-          # 检查关键输出目录
+          # Check if output exe exists
           if (Test-Path "dist/水位水泵控制/水位水泵控制.exe") {
-            Write-Host "✅ 打包成功，EXE 已生成"
+            Write-Host "BUILD SUCCESS: EXE found"
           } else {
-            Write-Error "❌ 打包失败：未找到 dist/水位水泵控制/水位水泵控制.exe"
+            Write-Error "BUILD FAILED: EXE not found"
             exit 1
           }
 
-      - name: 压缩打包文件夹
+      - name: Compress output folder
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           Compress-Archive -Path "dist/水位水泵控制/*" -DestinationPath "水位水泵控制.zip"
           if (Test-Path "水位水泵控制.zip") {
-            Write-Host "压缩完成：水位水泵控制.zip"
+            Write-Host "Compression OK: 水位水泵控制.zip"
           } else {
-            Write-Error "压缩失败"
+            Write-Error "Compression failed"
             exit 1
           }
 
-      - name: 上传制品
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: 水位水泵控制-Windows
