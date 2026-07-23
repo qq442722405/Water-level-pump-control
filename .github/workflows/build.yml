@@ -1,7 +1,7 @@
 name: 手动打包水位水泵控制EXE
 
 on:
-  workflow_dispatch:   # 仅手动触发，不会自动运行
+  workflow_dispatch:   # 仅手动触发
 
 jobs:
   build:
@@ -31,14 +31,14 @@ jobs:
       - name: 下载 EasyOCR 模型（若缓存未命中）
         if: steps.cache-models.outputs.cache-hit != 'true'
         env:
-          PYTHONIOENCODING: utf-8        # 修复进度条字符编码错误
+          PYTHONIOENCODING: utf-8
         run: |
           python -c "import easyocr; reader = easyocr.Reader(['en'], model_storage_directory='models', download_enabled=True)"
 
       - name: 使用 PyInstaller 打包
         shell: powershell
         run: |
-          pyinstaller --onefile --windowed `
+          python -m PyInstaller --onefile --windowed `
             --add-data "alarm.wav;." `
             --add-data "config.json;." `
             --add-data "models;models/" `
