@@ -1,77 +1,41 @@
-name: 水位水泵控制
+name: Build Windows EXE
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch: # 支持在 GitHub 页面点击按钮手动触发打包
 
 jobs:
-  build:
+  build-windows:
     runs-on: windows-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+    - name: 检出代码
+      uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+    - name: 设置 Python 环境
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        cache: 'pip'
 
-      - name: Upgrade pip and install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+    - name: 优先安装 PyTorch CPU 版本 (极大优化打包速度与体积)
+      run: |
+        python -m pip install --upgrade pip
+        pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
-      - name: List installed packages (debug)
-        run: pip list
+    - name: 安装项目依赖清单
+      run: |
+        pip install -r requirements.txt
 
-      - name: Build with PyInstaller (onedir, strict mode)
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-          Write-Host "Starting PyInstaller build..."
-          python -m PyInstaller --log-level=INFO --clean --noconfirm `
-            --windowed --onedir `
-            --name "水位水泵控制" `
-            --collect-all easyocr `
-            --collect-all torch `
-            --collect-all torchvision `
-            --collect-all opencv-python `
-            --collect-all pillow `
-            --collect-all pynput `
-            --collect-all pygame `
-            --collect-all pyautogui `
-            --hidden-import=cv2 `
-            --hidden-import=PIL `
-            --hidden-import=pygame `
-            --hidden-import=pyautogui `
-            --hidden-import=win10toast `
-            --hidden-import=pynput.keyboard._win32 `
-            --hidden-import=pynput.mouse._win32 `
-            main.py
-          Write-Host "PyInstaller command completed"
+    - name: 执行 PyInstaller 打包 (应用 1.ico 图标)
+      run: |
+        pyinstaller --noconsole --onefile --icon=1.ico --add-data "1.ico;." --name="水位水泵控制系统" main.py
 
-          # Check if output exe exists
-          if (Test-Path "dist/水位水泵控制/水位水泵控制.exe") {
-            Write-Host "BUILD SUCCESS: EXE found"
-          } else {
-            Write-Error "BUILD FAILED: EXE not found"
-            exit 1
-          }
-
-      - name: Compress output folder
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-          Compress-Archive -Path "dist/水位水泵控制/*" -DestinationPath "水位水泵控制.zip"
-          if (Test-Path "水位水泵控制.zip") {
-            Write-Host "Compression OK: 水位水泵控制.zip"
-          } else {
-            Write-Error "Compression failed"
-            exit 1
-          }
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: 水位水泵控制-Windows
-          path: 水位水泵控制.zip
+    - name: 上传打包产物 (Artifact)
+      uses: actions/upload-artifact@v4
+      with:
+        name: WaterPumpControl-Windows
+        path: dist/水位水泵控制系统.exe
