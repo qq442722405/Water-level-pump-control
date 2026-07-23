@@ -25,11 +25,9 @@ jobs:
       - name: 创建缺失文件（若不存在）
         shell: powershell
         run: |
-          # 如果 alarm.wav 不存在，生成 1 秒静音文件（避免打包报错）
           if (-not (Test-Path alarm.wav)) {
             python -c "import wave, struct; w=wave.open('alarm.wav','w'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(44100); w.writeframes(struct.pack('h',0)*44100); w.close()"
           }
-          # 如果 config.json 不存在，写入默认配置
           if (-not (Test-Path config.json)) {
             @"
 {
