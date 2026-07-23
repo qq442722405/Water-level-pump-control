@@ -126,10 +126,6 @@ def test_sound():
 
 # -------------------- 屏幕区域 / 点选择 --------------------
 def select_region_on_screen(callback, preview_widget=None):
-    """
-    全屏半透明窗口拖框选择区域，选择完后若 preview_widget 不为 None 则更新预览
-    callback 接收 (x,y,w,h)
-    """
     top = tk.Toplevel(root)
     top.attributes("-fullscreen", True)
     top.attributes("-alpha", 0.3)
@@ -193,13 +189,12 @@ def select_point_on_screen(callback):
     top.grab_set()
 
 def update_preview(label_widget, bbox):
-    """截取指定区域并显示到 label_widget 上（缩放至 200x50 以内）"""
     try:
         img = ImageGrab.grab(bbox=bbox)
         img.thumbnail((200, 50))
         photo = ImageTk.PhotoImage(img)
         label_widget.configure(image=photo)
-        label_widget.image = photo   # 保持引用
+        label_widget.image = photo
     except Exception as e:
         label_widget.configure(image='', text="预览失败")
 
@@ -302,7 +297,7 @@ def update_display(water, freq):
     else:
         water_label.config(text="识别失败")
     if freq is not None:
-        freq_label.config(text=f"{freq:.1f}")   # 不再显示 Hz
+        freq_label.config(text=f"{freq:.1f}")   # 不显示 Hz
     else:
         freq_label.config(text="识别失败")
     status_label.config(text="报警中" if alarm_triggered else "正常",
@@ -388,7 +383,7 @@ def update_ui_from_config():
 # -------------------- 构建 GUI --------------------
 root = tk.Tk()
 root.title("水位水泵控制 V2.0")
-root.geometry("440x680")   # 加高窗口
+root.geometry("440x680")
 root.resizable(False, False)
 
 try:
@@ -399,10 +394,10 @@ except:
 load_config()
 init_dirs()
 
-# ========== 标题 ==========
+# 标题
 tk.Label(root, text="水位水泵控制 V2.0", font=("Arial", 14, "bold")).pack(pady=5)
 
-# ========== 实时 OCR + 预览 ==========
+# 实时 OCR + 预览
 ocr_frame = tk.LabelFrame(root, text="实时 OCR & 预览", padx=5, pady=5)
 ocr_frame.pack(fill=tk.X, padx=10, pady=5)
 
@@ -416,7 +411,6 @@ water_rect_label = tk.Label(row_w, text="区域: 100,100 120x35", fg="gray")
 water_rect_label.pack(side=tk.LEFT, padx=5)
 tk.Button(row_w, text="选择区域", command=lambda: select_region_on_screen(update_water_rect, water_preview)).pack(side=tk.RIGHT, padx=2)
 
-# 液位预览
 water_preview = tk.Label(ocr_frame, text="液位预览", bg="lightgray", width=200, height=30)
 water_preview.pack(pady=2)
 
@@ -430,7 +424,6 @@ freq_rect_label = tk.Label(row_f, text="区域: 350,100 120x35", fg="gray")
 freq_rect_label.pack(side=tk.LEFT, padx=5)
 tk.Button(row_f, text="选择区域", command=lambda: select_region_on_screen(update_freq_rect, freq_preview)).pack(side=tk.RIGHT, padx=2)
 
-# 频率预览
 freq_preview = tk.Label(ocr_frame, text="频率预览", bg="lightgray", width=200, height=30)
 freq_preview.pack(pady=2)
 
@@ -444,11 +437,11 @@ tk.Label(row_s, text="连续异常：").pack(side=tk.LEFT, padx=(20,0))
 count_label = tk.Label(row_s, text="0", fg="red")
 count_label.pack(side=tk.LEFT)
 
-# ========== 参数设置 ==========
+# 参数设置
 param_frame = tk.LabelFrame(root, text="参数设置", padx=5, pady=5)
 param_frame.pack(fill=tk.X, padx=10, pady=5)
 
-def add_param_row(label, var_name, unit=""):
+def add_param_row(label, unit=""):
     row = tk.Frame(param_frame)
     row.pack(fill=tk.X, pady=2)
     tk.Label(row, text=label, width=14, anchor="e").pack(side=tk.LEFT)
@@ -466,7 +459,7 @@ ocr_interval_entry = add_param_row("检测间隔(ms)：")
 adjust_delay_entry = add_param_row("调整等待(ms)：")
 alarm_count_entry = add_param_row("报警次数：")
 
-# ========== 报警设置 ==========
+# 报警设置
 alarm_frame = tk.LabelFrame(root, text="报警设置", padx=5, pady=5)
 alarm_frame.pack(fill=tk.X, padx=10, pady=5)
 
@@ -485,7 +478,7 @@ tk.Checkbutton(row_a2, text="循环报警", variable=loop_var).pack(side=tk.LEFT
 mute_var = tk.BooleanVar(value=False)
 tk.Checkbutton(row_a2, text="静音", variable=mute_var).pack(side=tk.LEFT, padx=20)
 
-# ========== 操作坐标 ==========
+# 操作坐标
 coord_frame = tk.LabelFrame(root, text="操作坐标", padx=5, pady=5)
 coord_frame.pack(fill=tk.X, padx=10, pady=5)
 
@@ -501,7 +494,7 @@ tk.Button(row_c2, text="选择加频坐标", command=lambda: select_point_on_scr
 point2_label = tk.Label(row_c2, text="坐标: 1320,560", fg="gray")
 point2_label.pack(side=tk.LEFT, padx=10)
 
-# ========== 控制按钮 ==========
+# 控制按钮
 ctrl_frame = tk.Frame(root)
 ctrl_frame.pack(fill=tk.X, padx=10, pady=10)
 
@@ -512,7 +505,5 @@ stop_btn.pack(side=tk.LEFT, padx=5)
 tk.Button(ctrl_frame, text="保存设置", command=save_all_settings, width=10).pack(side=tk.LEFT, padx=5)
 tk.Button(ctrl_frame, text="恢复默认", command=restore_defaults, width=10).pack(side=tk.LEFT, padx=5)
 
-# 应用当前配置
 update_ui_from_config()
-
 root.mainloop()
