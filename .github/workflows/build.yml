@@ -22,27 +22,12 @@ jobs:
       - name: 安装依赖
         run: pip install -r requirements.txt
 
-      - name: 缓存 EasyOCR 模型
-        id: cache-models
-        uses: actions/cache@v3
-        with:
-          path: models
-          key: easyocr-models-${{ hashFiles('requirements.txt') }}
-
-      - name: 下载 EasyOCR 模型（若缓存未命中）
-        if: steps.cache-models.outputs.cache-hit != 'true'
-        env:
-          PYTHONIOENCODING: utf-8
-        run: |
-          python -c "import easyocr; reader = easyocr.Reader(['en'], model_storage_directory='models', download_enabled=True)"
-
-      - name: PyInstaller 打包（onedir 模式，更稳定）
+      - name: PyInstaller 打包（onedir 模式，最稳定）
         shell: powershell
         run: |
           python -m PyInstaller --clean --noconfirm `
             --windowed --onedir `
             --name "水位水泵控制" `
-            --icon=1.ico `
             --collect-all easyocr `
             --collect-all torch `
             --collect-all torchvision `
@@ -53,17 +38,16 @@ jobs:
             --hidden-import=win10toast `
             --hidden-import=pynput.keyboard._win32 `
             --hidden-import=pynput.mouse._win32 `
-            --add-data "models;models" `
             main.py
-          # 若没有 1.ico，删除 --icon=1.ico 即可，不会报错
+          # 无 --icon 行，也不打包 models，确保不会因文件缺失而失败
 
-      - name: 将打包文件夹压缩为 ZIP
+      - name: 压缩打包文件夹
         shell: powershell
         run: |
-          Compress-Archive -Path "dist/水位水泵控制/*" -DestinationPath "水位水泵控制_${{ github.run_number }}.zip"
+          Compress-Archive -Path "dist/水位水泵控制/*" -DestinationPath "水位水泵控制.zip"
 
-      - name: 上传压缩包
+      - name: 上传制品
         uses: actions/upload-artifact@v4
         with:
           name: 水位水泵控制-Windows
-          path: 水位水泵控制_${{ github.run_number }}.zip
+          path: 水位水泵控制.zip
