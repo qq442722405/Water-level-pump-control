@@ -1,9 +1,7 @@
-name: 水位水泵控制
+name: 水位水泵控制EXE
 
 on:
-  push:
-    branches: [ main ]
-  workflow_dispatch:   # 允许手动触发
+  workflow_dispatch:   # 仅手动触发
 
 jobs:
   build:
@@ -16,14 +14,14 @@ jobs:
       - name: 设置 Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'   # 稳定兼容
+          python-version: '3.10'
 
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 下载 EasyOCR 模型（若未缓存）
+      - name: 下载 EasyOCR 模型（若需要）
         run: |
           python -c "import easyocr; reader = easyocr.Reader(['en'], model_storage_directory='models', download_enabled=True)"
 
@@ -36,11 +34,11 @@ jobs:
             --add-data "models;models/" `
             --hidden-import=pynput.keyboard._win32 `
             --hidden-import=pynput.mouse._win32 `
-            --name "LiquidControl" `
+            --name "水位水泵控制" `
             main.py
 
-      - name: 上传成品 EXE
+      - name: 上传成品
         uses: actions/upload-artifact@v4
         with:
-          name: LiquidControl-Windows
-          path: dist/LiquidControl.exe
+          name: 水位水泵控制-Windows
+          path: dist/水位水泵控制.exe
