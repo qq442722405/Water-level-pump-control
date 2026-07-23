@@ -1,4 +1,4 @@
-name: Build 水位水泵控制
+name: 水位水泵控制
 
 on:
   workflow_dispatch:
@@ -8,32 +8,29 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - name: Checkout Source
+      - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: 设置 Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Upgrade pip
-        run: |
-          python -m pip install --upgrade pip
+      - name: 升级 pip
+        run: python -m pip install --upgrade pip
 
-      - name: Install Requirements
-        run: |
-          pip install -r requirements.txt
+      - name: 安装依赖
+        run: pip install -r requirements.txt
 
-      - name: Build EXE
+      - name: 打包 EXE
         shell: pwsh
         run: |
-          python -m PyInstaller `
-            --clean `
-            --noconfirm `
-            --onefile `
+          python -m PyInstaller --clean --noconfirm `
             --windowed `
+            --onefile `
             --name "水位水泵控制" `
+            --icon=1.ico `
             --collect-all easyocr `
             --collect-all torch `
             --collect-all torchvision `
@@ -42,10 +39,12 @@ jobs:
             --hidden-import=pygame `
             --hidden-import=pyautogui `
             --hidden-import=win10toast `
+            --hidden-import=pynput.keyboard._win32 `
+            --hidden-import=pynput.mouse._win32 `
             main.py
 
-      - name: Upload EXE
+      - name: 上传 EXE
         uses: actions/upload-artifact@v4
         with:
-          name: 水位水泵控制
+          name: 水位水泵控制-Windows
           path: dist/*.exe
